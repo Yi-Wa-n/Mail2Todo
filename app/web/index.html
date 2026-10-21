@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="local-token" content="__TOKEN__" />
+    <title>秋招 · 本机版</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <aside class="rail">
+      <a class="brand" href="/">秋招<span>本机版</span></a>
+      <nav id="nav" aria-label="页面导航"></nav>
+      <div class="rail-foot">数据保存在这台电脑<br />无在线文档依赖</div>
+    </aside>
+    <div class="workspace">
+      <header>
+        <div>
+          <div class="eyebrow">RECRUITMENT DESK</div>
+          <h1 id="title">待办日历</h1>
+        </div>
+        <div class="header-actions">
+          <span id="connection">连接中</span><button id="refresh">刷新</button
+          ><button id="scan" class="primary">扫描邮件</button>
+        </div>
+      </header>
+      <div id="message" role="status" aria-live="polite"></div>
+      <main id="main" aria-busy="true">
+        <div class="empty">正在读取本机记录…</div>
+      </main>
+      <footer id="footer"></footer>
+    </div>
+    <dialog id="detail">
+      <div class="dialog-head">
+        <h2 id="detail-title">邮件</h2>
+        <button id="close-detail" aria-label="关闭详情">×</button>
+      </div>
+      <div id="detail-body"></div>
+    </dialog>
+  </body>
+</html>

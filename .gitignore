@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+private/
+tmp/
+.env*
+*.db
+*.sqlite*
+*.dpapi
+*.log
+*.eml
+*.msg
