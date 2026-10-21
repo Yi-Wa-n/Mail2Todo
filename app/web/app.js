@@ -31,6 +31,15 @@ function savedCalendarView() {
 let calendarView = savedCalendarView();
 let calendarAnchor = null,
   calendarJump = null;
+const emailPageSizes = [10, 20, 50, 100];
+let emailPageSize = 20;
+try {
+  const saved = Number(localStorage.getItem("autumn-local-email-page-size"));
+  if (emailPageSizes.includes(saved)) emailPageSize = saved;
+} catch {}
+let emailPage = 1,
+  agendaAnchor = null,
+  agendaJump = false;
 let data = null,
   page = "calendar",
   month = new Date()
@@ -151,6 +160,7 @@ function navigate(name) {
   page = name;
   query = "";
   filterOffset = 0;
+  emailPage = 1;
   render();
 }
 function controls(count, search = true) {
@@ -166,6 +176,7 @@ function controls(count, search = true) {
     input.oninput = () => {
       const caret = input.selectionStart;
       query = input.value;
+      emailPage = 1;
       renderContent();
       const replacement = $(".search");
       replacement?.focus();
@@ -180,6 +191,7 @@ function controls(count, search = true) {
         showDone,
         (v) => {
           showDone = v;
+          emailPage = 1;
           renderContent();
         },
         "显示已完成",
@@ -261,6 +273,7 @@ function renderContent() {
   if (page === "settings" && main.querySelector('.settings[data-dirty="true"]'))
     return;
   captureCalendarPosition();
+  captureAgendaPosition();
   main.replaceChildren();
   main.classList.toggle("settings-page", page === "settings");
   if (page === "calendar") renderCalendar(main);
@@ -275,10 +288,18 @@ function renderCalendar(main) {
     bar = controls(steps.filter((s) => s.at).length + " 个时间节点", false),
     left = bar.firstChild;
   left.replaceChildren(
-    ...(calendarView === "list" ? [button("‹", () => moveMonth(-1))] : []),
-    el("strong", month.replace("-", " 年 ") + " 月"),
-    ...(calendarView === "list" ? [button("›", () => moveMonth(1))] : []),
+    el(
+      "strong",
+      calendarView === "month"
+        ? month.replace("-", " 年 ") + " 月"
+        : "全部日程",
+    ),
     button("今天", () => {
+      if (calendarView === "list") {
+        agendaJump = true;
+        renderContent();
+        return;
+      }
       month = new Date()
         .toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" })
         .slice(0, 7);
@@ -330,19 +351,7 @@ function renderCalendar(main) {
       left.querySelector("strong"),
     );
   } else {
-    const days = el("div", null, "days");
-    const cursor = new Date(month + "-01T00:00:00Z");
-    while (cursor.toISOString().startsWith(month)) {
-      days.append(calendarDay(cursor, eventsByDay, false));
-      cursor.setUTCDate(cursor.getUTCDate() + 1);
-    }
-    calendar.append(days);
-  }
-  if (
-    calendarView === "list" &&
-    !steps.some((s) => s.at && dayKey(s.at).startsWith(month))
-  ) {
-    calendar.append(el("div", "本月没有符合条件的日程", "empty"));
+    buildAgenda(calendar, eventsByDay);
   }
   main.append(calendar);
   const legend = el("div", null, "legend");
@@ -515,11 +524,60 @@ function buildScrollingCalendar(calendar, week, eventsByDay, title) {
   });
 }
 
-function moveMonth(delta) {
-  const d = new Date(month + "-01T00:00:00Z");
-  d.setUTCMonth(d.getUTCMonth() + delta);
-  month = d.toISOString().slice(0, 7);
-  renderContent();
+function captureAgendaPosition() {
+  const scroller = $(".agenda-scroll");
+  if (!scroller || agendaJump) return;
+  const top = scroller.getBoundingClientRect().top;
+  const group = [...scroller.querySelectorAll(".agenda-day")].find(
+    (g) => g.getBoundingClientRect().bottom > top + 1,
+  );
+  if (group)
+    agendaAnchor = {
+      date: group.dataset.date,
+      offset: group.getBoundingClientRect().top - top,
+    };
+}
+function buildAgenda(calendar, eventsByDay) {
+  const scroller = el("div", null, "agenda-scroll");
+  scroller.tabIndex = 0;
+  scroller.setAttribute("role", "region");
+  scroller.setAttribute("aria-label", "全部日程列表");
+  const dates = [...eventsByDay.keys()].sort();
+  for (const date of dates) {
+    const group = calendarDay(new Date(date + "T00:00:00Z"), eventsByDay, true);
+    group.className = "agenda-day";
+    const heading = group.querySelector(".date");
+    heading.className = "agenda-date";
+    const weekday = new Date(date + "T12:00:00+08:00").toLocaleDateString(
+      "zh-CN",
+      { weekday: "short", timeZone: "Asia/Shanghai" },
+    );
+    heading.textContent = date + "  " + weekday;
+    scroller.append(group);
+  }
+  const jump = agendaJump;
+  agendaJump = false;
+  if (!dates.length) {
+    scroller.append(el("div", "没有符合条件的日程", "empty"));
+    agendaAnchor = null;
+  }
+  calendar.append(scroller);
+  scroller.onscroll = captureAgendaPosition;
+  requestAnimationFrame(() => {
+    if (!scroller.isConnected || !dates.length) return;
+    const target =
+      !jump && agendaAnchor
+        ? agendaAnchor.date
+        : new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" });
+    const date = dates.find((d) => d >= target) || dates[dates.length - 1];
+    const group = scroller.querySelector('[data-date="' + date + '"]');
+    scroller.scrollTop =
+      group.offsetTop -
+      (!jump && agendaAnchor && date === agendaAnchor.date
+        ? agendaAnchor.offset
+        : 0);
+    captureAgendaPosition();
+  });
 }
 function table(headers) {
   const panel = el("div", null, "panel"),
@@ -573,11 +631,31 @@ function renderSteps(main) {
   main.append(panel);
   if (!steps.length) main.append(el("div", "没有符合条件的待办", "empty"));
 }
+function emailPageRows(emails, requestedPage, size) {
+  const sorted = [...emails].sort(
+    (a, b) =>
+      Date.parse(b.received) - Date.parse(a.received) ||
+      b.id.localeCompare(a.id),
+  );
+  const pages = Math.max(1, Math.ceil(sorted.length / size));
+  const current = Math.min(pages, Math.max(1, Math.trunc(requestedPage) || 1));
+  const start = (current - 1) * size;
+  return {
+    items: sorted.slice(start, start + size),
+    total: sorted.length,
+    pages,
+    current,
+    start: sorted.length ? start + 1 : 0,
+    end: Math.min(start + size, sorted.length),
+  };
+}
 function renderEmails(main) {
   const emails = data.emails.filter(
     (m) => m.active && (showDone || !m.done) && matches(m),
   );
   main.append(controls(emails.length + " 封邮件 · 按接收时间倒序"));
+  const result = emailPageRows(emails, emailPage, emailPageSize);
+  emailPage = result.current;
   const { panel, tbody } = table([
     "公司",
     "岗位",
@@ -589,8 +667,10 @@ function renderEmails(main) {
     "备注",
     "接收时间",
   ]);
-  for (const m of emails) {
+  for (const m of result.items) {
     const row = el("tr");
+    row.dataset.mailId = m.id;
+    row.dataset.received = m.received;
     row.append(
       td(button(m.company, () => openMail(m.id), "link")),
       td(m.role),
@@ -614,6 +694,47 @@ function renderEmails(main) {
     tbody.append(row);
   }
   main.append(panel);
+  const pager = el("nav", null, "pagination");
+  pager.setAttribute("aria-label", "邮件明细分页");
+  const pageSizeLabel = el("label", "每页条数"),
+    pageSize = el("select");
+  pageSize.setAttribute("aria-label", "每页条数");
+  for (const value of emailPageSizes) {
+    const option = el("option", value + " 条");
+    option.value = value;
+    pageSize.append(option);
+  }
+  pageSize.value = emailPageSize;
+  pageSize.onchange = () => {
+    emailPageSize = Number(pageSize.value);
+    emailPage = 1;
+    try {
+      localStorage.setItem(
+        "autumn-local-email-page-size",
+        String(emailPageSize),
+      );
+    } catch {}
+    renderContent();
+  };
+  pageSizeLabel.append(pageSize);
+  const previous = button("上一页", () => {
+    emailPage--;
+    renderContent();
+  });
+  previous.disabled = emailPage <= 1;
+  const next = button("下一页", () => {
+    emailPage++;
+    renderContent();
+  });
+  next.disabled = emailPage >= result.pages;
+  pager.append(
+    pageSizeLabel,
+    el("span", result.start + "–" + result.end + " / " + result.total, "count"),
+    previous,
+    el("span", emailPage + " / " + result.pages, "page-number"),
+    next,
+  );
+  main.append(pager);
   if (!emails.length) main.append(el("div", "没有符合条件的邮件", "empty"));
 }
 function openStep(step) {

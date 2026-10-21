@@ -571,25 +571,56 @@ body.modal-open {
 .calendar.view-list .week {
   display: none;
 }
-.calendar.view-list .days {
-  display: block;
+.agenda-scroll {
+  position: relative;
+  height: clamp(360px, 68vh, 760px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
 }
-.calendar.view-list .day {
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 35px 1fr;
-  padding: 12px;
-  border-right: 0;
+.agenda-day {
+  padding: 0 15px 15px;
+  border-bottom: 1px solid var(--line);
 }
-.calendar.view-list .day:not(:has(.event)) {
-  display: none;
+.agenda-date {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 13px 0;
+  background: white;
+  font-size: 13px;
+  font-weight: 600;
 }
-.calendar.view-list .day .date {
-  grid-column: 1;
-  grid-row: 1 / span 10;
-  align-items: start;
-  font-size: 16px;
-  margin-top: 10px;
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+.pagination label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pagination select {
+  padding: 7px;
+  background: white;
+  color: #34445b;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.pagination button {
+  border: 1px solid #dce3ed;
+  padding: 8px 13px;
+  background: white;
+}
+.page-number {
+  font-size: 12px;
+  color: var(--muted);
 }
 .calendar.view-list .event {
   grid-column: 2;
