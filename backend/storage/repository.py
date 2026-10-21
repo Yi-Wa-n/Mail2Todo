@@ -6,10 +6,11 @@ import sqlite3
 from backend.mail.core import records,action_items,inactive_ids,get_meta,set_meta,canonical,digest,now
 from backend.mail.steps import project
 from backend.storage.vault import HOME,crypt
+from backend.storage.vault import account_home
 
 
 def connect():
-    db=sqlite3.connect(HOME/'ledger.sqlite3',timeout=20)
+    db=sqlite3.connect(account_home()/'ledger.sqlite3',timeout=20)
     db.row_factory=sqlite3.Row
     db.execute('PRAGMA busy_timeout=20000')
     return db

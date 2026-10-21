@@ -451,6 +451,10 @@ summary {
 .settings h2 {
   margin-bottom: 24px;
 }
+.mailbox-settings > h2,
+.mailbox-settings > p {
+  margin: 20px 25px;
+}
 .scheduler-settings {
   margin-top: 20px;
 }

@@ -13,7 +13,7 @@ import re
 import sqlite3
 import ssl
 import time
-from backend.storage.vault import HOME, crypt
+from backend.storage.vault import HOME, crypt, account_home
 
 TZ = dt.timezone(dt.timedelta(hours=8))
 CATEGORIES = ['投递回执', '测评', '笔试', 'AI面试', '面试', '补充材料', '录用', '未通过', '其他招聘通知']
@@ -101,7 +101,7 @@ def safe_text(text):
 
 
 def open_db(path=None):
-    path = Path(path) if path else HOME / 'ledger.sqlite3'
+    path = Path(path) if path else account_home() / 'ledger.sqlite3'
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path, timeout=30)
     db.row_factory = sqlite3.Row

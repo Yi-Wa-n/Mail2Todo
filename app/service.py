@@ -9,6 +9,7 @@ import threading
 from backend.cli.manager import locked
 from backend.storage import repository as repo
 from backend.storage.vault import HOME
+from backend.storage.vault import account_home,account_id
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -31,21 +32,37 @@ class Service:
             finally:db.close()
 
     def state(self):
-        value=self.use(repo.state)
+        with self.guard:
+            value=self.use(repo.state)
+            value['job']=dict(self.job)
+            value['account']=account_id()
+            value['version']=value['account']+':'+str(value['revision'])+':'+str(self.job_version)
         from backend.jobs.scheduler import status
         value['schedule']=status()
-        value['job']=dict(self.job)
-        value['version']=str(value['revision'])+':'+str(self.job_version)
         return value
 
     def revision(self):return self.use(repo.revision)
 
-    def version(self):return str(self.revision())+':'+str(self.job_version)
+    def version(self):
+        with self.guard:return account_id()+':'+str(self.revision())+':'+str(self.job_version)
+
+    def check_account(self,value):
+        if value.get('account') != account_id():raise ValueError('邮箱已切换，请刷新后再修改')
+
+    def mailbox(self,value):
+        from backend.storage.accounts import update
+        with self.guard,locked():
+            if self.job['running']:raise ValueError('扫描中，请稍后切换或更新授权码')
+            result=update(value)
+            self.job_version+=1
+        with self.changed:self.changed.notify_all()
+        return result
 
     def is_busy(self):return self.job['running']
 
     def edit(self,kind,value):
         with self.guard,locked():
+            self.check_account(value)
             self.use(lambda db:repo.mutate(db,kind,value))
             result=self.state()
         with self.changed:self.changed.notify_all()
@@ -55,6 +72,7 @@ class Service:
 
     def manual(self,value):
         with self.guard,locked():
+            self.check_account(value)
             self.use(lambda db:repo.edit_manual(db,value))
             result=self.state()
         with self.changed:self.changed.notify_all()
@@ -70,7 +88,7 @@ class Service:
 
     def audits(self):
         result=[]
-        for path in sorted((HOME/'local-gate/audits').glob('*/manifest.json'),reverse=True)[:200]:
+        for path in sorted((account_home()/'local-gate/audits').glob('*/manifest.json'),reverse=True)[:200]:
             try:
                 item=json.loads(path.read_text(encoding='utf-8'))
                 result.append({k:item.get(k) for k in ('audit_id','started_at','actual_model','model_status','sync_status','provider','correction')})
@@ -79,7 +97,7 @@ class Service:
 
     def audit(self,key):
         if not re.fullmatch(r'[0-9]{8}T[0-9]{12}-[0-9a-f]{12}',key):raise ValueError('无效审计记录')
-        folder=HOME/'local-gate/audits'/key
+        folder=account_home()/'local-gate/audits'/key
         def read(name):
             path=folder/name
             return path.read_text(encoding='utf-8') if path.exists() else ''
@@ -89,8 +107,9 @@ class Service:
         from backend.jobs.scheduler import status
         schedule=status()
         config=json.loads((HOME/'local-gate.json').read_text(encoding='utf-8'))
-        return {'model':config.get('codebuddy_model'),'fallback':config.get('codebuddy_fallback_model'),
-                'effort':config.get('reasoning_effort','low'),'credentials_saved':(HOME/'credentials.dpapi').exists(),
+        from backend.storage.accounts import listing
+        return {'mailbox':listing(),'model':config.get('codebuddy_model'),'fallback':config.get('codebuddy_fallback_model'),
+                'effort':config.get('reasoning_effort','low'),'credentials_saved':(account_home()/'credentials.dpapi').exists(),
                 'automatic_enabled':schedule.get('enabled'),'schedule':schedule}
 
     def save_settings(self,value):

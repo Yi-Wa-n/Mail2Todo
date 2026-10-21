@@ -95,6 +95,7 @@ def handler(service,token,life):
                 if self.path=='/api/manual':return self.reply(service.manual(value))
                 if self.path=='/api/scan':return self.reply({'started':service.scan()})
                 if self.path=='/api/settings':return self.reply(service.save_settings(value))
+                if self.path=='/api/mailbox':return self.reply(service.mailbox(value))
                 if self.path=='/api/schedule':return self.reply(service.save_schedule(value))
                 self.reply({'error':'操作不存在'},404)
             except ValueError as error:self.reply({'error':str(error)},409)

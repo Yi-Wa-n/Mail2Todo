@@ -9,6 +9,9 @@ from backend.mail.core import now,set_meta
 
 def main():
     with locked():
+        from backend.storage.vault import account_home
+        import backend.jobs.local_gate as gate
+        gate.RUNTIME=account_home()/'local-gate'
         db=connect()
         try:
             initialize(db)

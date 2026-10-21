@@ -97,6 +97,9 @@ function tell(text, error = false) {
   $("#message").className = error ? "error" : "";
 }
 async function api(path, value) {
+  if (value !== undefined && ["/api/step", "/api/email", "/api/notes", "/api/manual", "/api/mailbox"].includes(path)) {
+    value = { ...value, account: data?.account };
+  }
   const response = await fetch(
     path,
     value === undefined
@@ -119,7 +122,17 @@ async function refresh(feedback = false) {
   loading = true;
   $("#refresh").disabled = true;
   try {
+    const previousAccount = data?.account;
     data = await api("/api/state");
+    if (previousAccount && previousAccount !== data.account) {
+      settingsCache = null;
+      selected = null;
+      dirtyNotes = false;
+      $("#detail").close();
+      query = "";
+      emailPage = 1;
+      $("#main").querySelectorAll(".settings").forEach((form) => { form.dataset.dirty = "false"; });
+    }
     if (feedback) settingsCache = null;
     render();
     if (selected && !dirtyNotes) renderDetail();
@@ -983,10 +996,11 @@ function renderDetail() {
   body.append(buttons);
 }
 async function renderFiltered(main) {
+  const revision = contentRevision;
   main.append(el("div", "正在读取…", "empty"));
   try {
     const result = await api("/api/filtered?offset=" + filterOffset);
-    if (page !== "filtered") return;
+    if (page !== "filtered" || revision !== contentRevision) return;
     main.replaceChildren(controls(result.total + " 封本机过滤记录", false));
     const { panel, tbody } = table(["主题", "过滤原因", "接收时间"]);
     for (const item of result.items) {
@@ -1049,10 +1063,11 @@ function showText(title, text) {
   document.body.classList.add("modal-open");
 }
 async function renderAudits(main) {
+  const revision = contentRevision;
   main.append(el("div", "正在读取…", "empty"));
   try {
     const items = await api("/api/audits");
-    if (page !== "audits") return;
+    if (page !== "audits" || revision !== contentRevision) return;
     main.replaceChildren(
       controls(items.length + " 条模型判断 · 包含导入的历史记录", false),
     );
@@ -1103,6 +1118,56 @@ async function renderAudits(main) {
     tell(e.message, true);
   }
 }
+function renderMailboxSettings(main, mailbox) {
+  const panel = el("section", null, "panel mailbox-settings");
+  panel.append(el("h2", "邮箱"));
+  const current = mailbox.accounts.find((item) => item.id === mailbox.active);
+  panel.append(el("p", current?.email || "未配置邮箱"));
+  function field(form, title, type = "text") {
+    const label = el("label", title), input = el("input");
+    input.type = type;
+    input.setAttribute("aria-label", title);
+    input.autocomplete = type === "password" ? "new-password" : "off";
+    label.append(input); form.append(label); return input;
+  }
+  function wire(form, save, payload, secret) {
+    form.oninput = () => { form.dataset.dirty = "true"; };
+    const status = el("p", "", "small"); status.setAttribute("role", "status");
+    form.append(save, status);
+    form.onsubmit = async (event) => {
+      event.preventDefault(); save.disabled = true; status.textContent = "正在验证邮箱…";
+      try {
+        await api("/api/mailbox", payload());
+        secret.value = ""; form.dataset.dirty = "false"; settingsCache = null;
+        status.textContent = "已保存";
+        await refresh(); tell("邮箱设置已保存");
+      } catch (error) { status.textContent = error.message; }
+      finally { secret.value = ""; save.disabled = false; }
+    };
+  }
+  const update = el("form", null, "settings");
+  update.append(el("h3", "更新授权码"));
+  const code = field(update, "新授权码", "password"); code.required = true;
+  const updateButton = button("更新授权码", null, "primary"); updateButton.type = "submit";
+  wire(update, updateButton, () => ({op:"credentials", code:code.value}), code);
+  const change = el("form", null, "settings");
+  change.append(el("h3", "切换邮箱"));
+  const savedLabel = el("label", "已有邮箱"), saved = el("select");
+  saved.setAttribute("aria-label", "已有邮箱");
+  const fresh = el("option", "输入新邮箱"); fresh.value = ""; saved.append(fresh);
+  for (const item of mailbox.accounts) {
+    if (item.email === "凭证不可读取") continue;
+    const option = el("option", item.email); option.value = item.email; saved.append(option);
+  }
+  savedLabel.append(saved); change.append(savedLabel);
+  const address = field(change, "邮箱地址", "email"); address.required = true;
+  saved.onchange = () => { address.value = saved.value; change.dataset.dirty = "true"; };
+  const newCode = field(change, "授权码（已有邮箱可留空）", "password");
+  const switchButton = button("切换邮箱", null, "primary"); switchButton.type = "submit";
+  wire(change, switchButton, () => ({op:"switch", email:address.value, code:newCode.value}), newCode);
+  change.append(el("p", "每个邮箱独立保存；切回后恢复原记录。", "small"));
+  panel.append(update, change); main.append(panel);
+}
 async function renderSettings(main, revision) {
   const current = () => page === "settings" && revision === contentRevision;
   main.append(el("div", "加载设置…", "small"));
@@ -1110,6 +1175,7 @@ async function renderSettings(main, revision) {
     const config = settingsCache || await loadSettings();
     if (!current()) return;
     main.replaceChildren();
+    if (config.mailbox) renderMailboxSettings(main, config.mailbox);
     const form = el("form", null, "panel settings"),
       fields = {};
     form.oninput = () => {

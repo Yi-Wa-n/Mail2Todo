@@ -7,6 +7,21 @@ from pathlib import Path
 
 HOME = Path(__file__).resolve().parents[2]/'private'/'runtime'
 
+def account_id():
+    path = HOME/'active-account.json'
+    value = json.loads(path.read_text(encoding='utf-8'))['id'] if path.exists() else 'legacy'
+    import re
+    if value != 'legacy' and not re.fullmatch(r'[0-9a-f]{64}', value):
+        raise RuntimeError('邮箱台账配置无效')
+    return value
+
+def account_home(key=None):
+    key = account_id() if key is None else key
+    if key == 'legacy': return HOME
+    import re
+    if not re.fullmatch(r'[0-9a-f]{64}', key): raise ValueError('无效台账标识')
+    return HOME/'accounts'/key
+
 
 def physical_home():
     """Resolve MSIX LocalAppData virtualization for an unpackaged scheduled task."""
@@ -48,16 +63,17 @@ def crypt(data: bytes, decrypt=False) -> bytes:
         ctypes.windll.kernel32.LocalFree(dst.data)
 
 
-def save_credentials(value):
-    HOME.mkdir(parents=True, exist_ok=True)
-    path = HOME / 'credentials.dpapi'
+def save_credentials(value, home=None):
+    home = account_home() if home is None else home
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / 'credentials.dpapi'
     temp = path.with_suffix('.new')
     temp.write_bytes(crypt(json.dumps(value, ensure_ascii=False).encode('utf-8')))
     os.replace(temp, path)
 
 
-def load_credentials():
-    path = HOME / 'credentials.dpapi'
+def load_credentials(home=None):
+    path = (account_home() if home is None else home) / 'credentials.dpapi'
     if not path.exists():
         raise RuntimeError('本机版尚未配置网易邮箱授权')
     return json.loads(crypt(path.read_bytes(), decrypt=True))
