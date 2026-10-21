@@ -32,6 +32,8 @@ class Service:
 
     def state(self):
         value=self.use(repo.state)
+        from backend.jobs.scheduler import status
+        value['schedule']=status()
         value['job']=dict(self.job)
         value['version']=str(value['revision'])+':'+str(self.job_version)
         return value
@@ -84,10 +86,12 @@ class Service:
         return {name:read(name) for name in ['manifest.json','input.json','output.txt','initial-output.txt','correction-input.json','correction-output.txt']}
 
     def settings(self):
+        from backend.jobs.scheduler import status
+        schedule=status()
         config=json.loads((HOME/'local-gate.json').read_text(encoding='utf-8'))
         return {'model':config.get('codebuddy_model'),'fallback':config.get('codebuddy_fallback_model'),
                 'effort':config.get('reasoning_effort','low'),'credentials_saved':(HOME/'credentials.dpapi').exists(),
-                'automatic_enabled':False}
+                'automatic_enabled':schedule.get('enabled'),'schedule':schedule}
 
     def save_settings(self,value):
         if set(value)!={'model','fallback','effort'}:raise ValueError('无效设置字段')
@@ -101,6 +105,15 @@ class Service:
             config.update(codebuddy_model=value['model'],codebuddy_fallback_model=value['fallback'],reasoning_effort=value['effort'],notifications_enabled=False)
             temp=path.with_suffix('.new');temp.write_text(json.dumps(config,ensure_ascii=False,indent=2),encoding='utf-8');temp.replace(path)
         return self.settings()
+
+    def save_schedule(self,value):
+        from backend.jobs.scheduler import update
+        with self.guard:
+            if self.job['running']:raise ValueError('正在扫描，请结束后再保存')
+            result=update(value)
+            self.job_version+=1
+        with self.changed:self.changed.notify_all()
+        return result
 
     def scan(self):
         with self.guard:

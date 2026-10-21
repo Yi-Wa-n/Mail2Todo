@@ -12,6 +12,7 @@ class FakeService:
         if value.get('stale'):raise ValueError('记录已变化')
         return {'saved':kind}
     def manual(self,value):return {'manual':value['op']}
+    def save_schedule(self,value):return {'schedule':value}
 
 
 class ServerTests(unittest.TestCase):
@@ -45,6 +46,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(200,self.request('/api/email','POST',{},headers)[0])
         self.assertEqual(409,self.request('/api/email','POST',{'stale':True},headers)[0])
         self.assertEqual(200,self.request('/api/manual','POST',{'op':'create'},headers)[0])
+        self.assertEqual(200,self.request('/api/schedule','POST',{'interval_hours':1},headers)[0])
 
     def test_browser_stream_and_scan_protect_idle_exit(self):
         clock=[0];life=IdleLifecycle(timeout=120,clock=lambda:clock[0])
