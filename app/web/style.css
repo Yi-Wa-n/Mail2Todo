@@ -546,7 +546,44 @@ body.modal-open {
   }
   .week,
   .days {
-    min-width: 730px;
+    min-width: 0;
+  }
+  .week {
+    display: none;
+  }
+  .days {
+    display: block;
+  }
+  .day {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 35px 1fr;
+    padding: 12px;
+    border-right: 0;
+  }
+  .day:not(:has(.event)) {
+    display: none;
+  }
+  .day .date {
+    grid-column: 1;
+    grid-row: 1 / span 10;
+    align-items: start;
+    font-size: 16px;
+    margin-top: 10px;
+  }
+  .event {
+    grid-column: 2;
+    padding: 10px;
+    gap: 9px;
+  }
+  .event button {
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+    font-size: 13px;
+  }
+  .event .time {
+    flex-shrink: 0;
   }
   .toolbar {
     flex-wrap: wrap;
