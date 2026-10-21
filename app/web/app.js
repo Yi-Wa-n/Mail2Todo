@@ -40,6 +40,15 @@ try {
 let emailPage = 1,
   agendaAnchor = null,
   agendaJump = false;
+let contentRevision = 0, settingsRequest = null, settingsCache = null;
+function loadSettings() {
+  if (!settingsRequest) {
+    settingsRequest = api("/api/settings")
+      .then((config) => (settingsCache = config))
+      .finally(() => { settingsRequest = null; });
+  }
+  return settingsRequest;
+}
 let data = null,
   page = "calendar",
   month = new Date()
@@ -111,6 +120,7 @@ async function refresh(feedback = false) {
   $("#refresh").disabled = true;
   try {
     data = await api("/api/state");
+    if (feedback) settingsCache = null;
     render();
     if (selected && !dirtyNotes) renderDetail();
     $("#connection").textContent = "本机已连接";
@@ -274,6 +284,7 @@ function renderContent() {
     return;
   captureCalendarPosition();
   captureAgendaPosition();
+  const revision = ++contentRevision;
   main.replaceChildren();
   main.classList.toggle("settings-page", page === "settings");
   if (page === "calendar") renderCalendar(main);
@@ -281,7 +292,7 @@ function renderContent() {
   else if (page === "emails") renderEmails(main);
   else if (page === "filtered") renderFiltered(main);
   else if (page === "audits") renderAudits(main);
-  else renderSettings(main);
+  else renderSettings(main, revision);
 }
 function renderCalendar(main) {
   const steps = visibleSteps(),
@@ -1091,10 +1102,13 @@ async function renderAudits(main) {
     tell(e.message, true);
   }
 }
-async function renderSettings(main) {
+async function renderSettings(main, revision) {
+  const current = () => page === "settings" && revision === contentRevision;
+  main.append(el("div", "加载设置…", "small"));
   try {
-    const config = await api("/api/settings");
-    if (page !== "settings") return;
+    const config = settingsCache || await loadSettings();
+    if (!current()) return;
+    main.replaceChildren();
     const form = el("form", null, "panel settings"),
       fields = {};
     form.oninput = () => {
@@ -1129,12 +1143,13 @@ async function renderSettings(main) {
     form.onsubmit = async (e) => {
       e.preventDefault();
       try {
-        await api(
+        const actual = await api(
           "/api/settings",
           Object.fromEntries(
             Object.entries(fields).map(([k, v]) => [k, v.value]),
           ),
         );
+        settingsCache = actual;
         form.dataset.dirty = "false";
         tell("设置已保存");
       } catch (e) {
@@ -1197,6 +1212,7 @@ async function renderSettings(main) {
           ),
         );
         data.schedule = actual;
+        if (settingsCache) settingsCache.schedule = actual;
         timerStatus.textContent =
           "下次检查：" + fmt(actual.next_run) + "（北京时间）";
         timerForm.dataset.dirty = "false";
@@ -1211,6 +1227,8 @@ async function renderSettings(main) {
     };
     main.append(timerForm);
   } catch (e) {
+    if (!current()) return;
+    main.replaceChildren(el("div", "加载失败", "small"), button("重试", () => renderContent()));
     tell(e.message, true);
   }
 }
