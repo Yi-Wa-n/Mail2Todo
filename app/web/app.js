@@ -130,6 +130,7 @@ async function refresh(feedback = false) {
           new Date().toLocaleTimeString("zh-CN", { hour12: false }),
       );
   } catch (e) {
+    $("#connection").textContent = data ? "刷新失败，可重试" : "读取失败，请重试";
     tell(e.message, true);
   } finally {
     loading = false;
@@ -1251,6 +1252,10 @@ $("#detail").addEventListener("close", () => {
 function connect() {
   if (stream) return;
   stream = new EventSource("/api/session?token=" + encodeURIComponent(token));
+  stream.onopen = () => {
+    $("#connection").textContent = data ? "本机已连接" : "正在读取记录…";
+    if (!data && !loading) refresh();
+  };
   stream.onmessage = (e) => {
     if (data && e.data !== data.version) {
       const wasRunning = data.job.running;
