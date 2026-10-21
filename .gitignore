@@ -9,3 +9,5 @@ tmp/
 *.log
 *.eml
 *.msg
+.venv/
+private-config.json
