@@ -75,4 +75,6 @@ node tests/test_settings.js
 
 测试使用临时数据，不读取真实邮箱、不调用模型。结构：`app/` 为页面与服务，`backend/mail/` 为邮件与步骤，`backend/models/` 为 CLI 校验和审计，`backend/storage/` 为存储，`backend/jobs/` 为扫描任务。没有第三方 Python/前端运行依赖。
 
-尚未指定开源许可证；公开源码前需确认许可及复用代码的发布权利。
+## 许可证
+
+本项目采用 [MIT License](LICENSE)，版权署名为 `Copyright (c) 2026 yiwan`。使用、修改或再分发时，请保留版权和许可声明。
