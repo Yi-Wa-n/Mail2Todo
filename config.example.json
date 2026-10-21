@@ -1,0 +1,8 @@
+{
+  "model_provider": "codebuddy_cn",
+  "codebuddy_cli": "C:/Tools/CodeBuddy/codebuddy.exe",
+  "codebuddy_model": "deepseek-v4.1-flash",
+  "codebuddy_fallback_model": "auto",
+  "reasoning_effort": "low",
+  "notifications_enabled": false
+}
