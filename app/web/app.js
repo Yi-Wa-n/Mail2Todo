@@ -16,7 +16,21 @@ const colors = {
   AI面试: ["#398e85", "#e9f6f3"],
   补充材料: ["#a96c64", "#fbefec"],
   录用: ["#628849", "#f0f6e9"],
+  手动日程: ["#677590", "#eef1f8"],
 };
+const viewPreferenceKey = "autumn-local-calendar-view";
+function savedCalendarView() {
+  try {
+    return localStorage.getItem(viewPreferenceKey) === "list"
+      ? "list"
+      : "month";
+  } catch {
+    return "month";
+  }
+}
+let calendarView = savedCalendarView();
+let calendarAnchor = null,
+  calendarJump = null;
 let data = null,
   page = "calendar",
   month = new Date()
@@ -114,11 +128,15 @@ function checkbox(done, fn, label) {
 async function change(kind, item, done, input) {
   input.disabled = true;
   try {
-    data = await api("/api/" + kind, {
-      id: item.id,
-      version: item.version,
-      done,
-    });
+    data = await api(
+      item.source === "manual" ? "/api/manual" : "/api/" + kind,
+      {
+        op: "complete",
+        id: item.manual_id || item.id,
+        version: item.version,
+        done,
+      },
+    );
     render();
     if (selected && !dirtyNotes) renderDetail();
     tell(done ? "已完成" : "已恢复待办");
@@ -184,9 +202,28 @@ function matches(item) {
   );
 }
 function visibleSteps() {
-  return data.steps.filter(
-    (s) => s.active && (showDone || !s.done) && matches(s),
+  const manual = (data.manual_events || []).flatMap((event) =>
+    ["start", "deadline"]
+      .filter((key) => event[key])
+      .map((key) => ({
+        id: "manual:" + event.id + ":" + key,
+        manual_id: event.id,
+        source: "manual",
+        version: event.version,
+        company: event.title,
+        role: "手动日程",
+        category: "手动日程",
+        label: key === "start" ? "开始" : "截止",
+        action: event.notes || event.title,
+        at: event[key],
+        active: true,
+        done: event.done,
+        received: event.created_at,
+      })),
   );
+  return [...data.steps, ...manual]
+    .sort((a, b) => b.received.localeCompare(a.received))
+    .filter((s) => s.active && (showDone || !s.done) && matches(s));
 }
 function render() {
   if (!data) return;
@@ -203,13 +240,29 @@ function render() {
     (data.last_scan
       ? "最近扫描 " + fmt(data.last_scan)
       : "导入本机快照 " + fmt(data.imported_at)) +
-    " · 独立版未启用定时检查";
+    " · " +
+    scheduleSummary(data.schedule);
   renderContent();
   $("#main").setAttribute("aria-busy", "false");
 }
+function scheduleSummary(schedule) {
+  if (!schedule || schedule.error)
+    return schedule?.error || "定时详情将在页面服务重启后显示";
+  if (!schedule.enabled) return "自动检查未启用";
+  return (
+    "每 " +
+    schedule.interval_hours +
+    " 小时检查 · 下次 " +
+    fmt(schedule.next_run)
+  );
+}
 function renderContent() {
   const main = $("#main");
+  if (page === "settings" && main.querySelector('.settings[data-dirty="true"]'))
+    return;
+  captureCalendarPosition();
   main.replaceChildren();
+  main.classList.toggle("settings-page", page === "settings");
   if (page === "calendar") renderCalendar(main);
   else if (page === "steps") renderSteps(main);
   else if (page === "emails") renderEmails(main);
@@ -222,73 +275,75 @@ function renderCalendar(main) {
     bar = controls(steps.filter((s) => s.at).length + " 个时间节点", false),
     left = bar.firstChild;
   left.replaceChildren(
-    button("‹", () => moveMonth(-1)),
+    ...(calendarView === "list" ? [button("‹", () => moveMonth(-1))] : []),
     el("strong", month.replace("-", " 年 ") + " 月"),
-    button("›", () => moveMonth(1)),
+    ...(calendarView === "list" ? [button("›", () => moveMonth(1))] : []),
     button("今天", () => {
       month = new Date()
         .toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" })
         .slice(0, 7);
+      calendarJump = new Date().toLocaleDateString("sv-SE", {
+        timeZone: "Asia/Shanghai",
+      });
       renderContent();
     }),
   );
+  const switcher = el("div", null, "view-switch");
+  switcher.setAttribute("role", "group");
+  switcher.setAttribute("aria-label", "日历展示方式");
+  for (const [value, label] of [
+    ["month", "月历"],
+    ["list", "列表"],
+  ]) {
+    const option = button(label, () => {
+      calendarView = value;
+      try {
+        localStorage.setItem(viewPreferenceKey, value);
+      } catch {
+        tell("已切换；浏览器禁止保存偏好，刷新后可能恢复月历", true);
+      }
+      renderContent();
+    });
+    option.setAttribute("aria-pressed", String(calendarView === value));
+    switcher.append(option);
+  }
+  bar.lastChild.prepend(switcher);
+  bar.lastChild.prepend(button("新建日程", () => openManual(), "primary"));
   main.append(bar);
-  const calendar = el("div", null, "calendar"),
+  const eventsByDay = new Map();
+  for (const step of steps) {
+    if (!step.at) continue;
+    const date = dayKey(step.at);
+    if (!eventsByDay.has(date)) eventsByDay.set(date, []);
+    eventsByDay.get(date).push(step);
+  }
+  const calendar = el("div", null, "calendar view-" + calendarView),
     week = el("div", null, "week");
   for (const name of ["一", "二", "三", "四", "五", "六", "日"])
     week.append(el("div", name));
   calendar.append(week);
-  const days = el("div", null, "days"),
-    first = new Date(month + "-01T00:00:00Z"),
-    start = new Date(first);
-  start.setUTCDate(1 - ((first.getUTCDay() + 6) % 7));
-  const today = new Date().toLocaleDateString("sv-SE", {
-    timeZone: "Asia/Shanghai",
-  });
-  for (let i = 0; i < 42; i++) {
-    const date = new Date(start);
-    date.setUTCDate(start.getUTCDate() + i);
-    const key = date.toISOString().slice(0, 10),
-      cell = el(
-        "div",
-        null,
-        "day" +
-          (key.startsWith(month) ? "" : " outside") +
-          (key === today ? " today" : ""),
-      ),
-      dateLabel = el("div", null, "date");
-    dateLabel.append(el("span", date.getUTCDate()));
-    cell.append(dateLabel);
-    for (const step of steps
-      .filter((s) => s.at && dayKey(s.at) === key)
-      .sort((a, b) => a.at.localeCompare(b.at))) {
-      const card = color(
-          el("div", null, "event" + (step.done ? " done" : "")),
-          step.category,
-        ),
-        title = button("", () => openMail(step.mail_id));
-      title.append(
-        el(
-          "span",
-          step.company + "｜" + step.label + (step.estimated ? "（估算）" : ""),
-          "event-title",
-        ),
-        el("span", fmt(step.at).slice(11), "time"),
-      );
-      title.title = step.role + " · " + step.action;
-      card.append(
-        checkbox(
-          step.done,
-          (v, c) => change("step", step, v, c),
-          "完成 " + step.company + " " + step.label,
-        ),
-        title,
-      );
-      cell.append(card);
+  if (calendarView === "month") {
+    buildScrollingCalendar(
+      calendar,
+      week,
+      eventsByDay,
+      left.querySelector("strong"),
+    );
+  } else {
+    const days = el("div", null, "days");
+    const cursor = new Date(month + "-01T00:00:00Z");
+    while (cursor.toISOString().startsWith(month)) {
+      days.append(calendarDay(cursor, eventsByDay, false));
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
     }
-    days.append(cell);
+    calendar.append(days);
   }
-  calendar.append(days);
+  if (
+    calendarView === "list" &&
+    !steps.some((s) => s.at && dayKey(s.at).startsWith(month))
+  ) {
+    calendar.append(el("div", "本月没有符合条件的日程", "empty"));
+  }
   main.append(calendar);
   const legend = el("div", null, "legend");
   for (const type of Object.keys(colors)) {
@@ -307,6 +362,159 @@ function renderCalendar(main) {
       ),
     );
 }
+function calendarDay(date, eventsByDay, continuous) {
+  const today = new Date().toLocaleDateString("sv-SE", {
+    timeZone: "Asia/Shanghai",
+  });
+  const key = date.toISOString().slice(0, 10),
+    cell = el(
+      "div",
+      null,
+      "day" +
+        (!continuous && !key.startsWith(month) ? " outside" : "") +
+        (key === today ? " today" : ""),
+    ),
+    dateLabel = el("div", null, "date");
+  if (date.getUTCDate() === 1)
+    dateLabel.append(el("small", date.getUTCMonth() + 1 + "月"));
+  dateLabel.append(el("span", date.getUTCDate()));
+  cell.append(dateLabel);
+  cell.dataset.date = key;
+  for (const step of (eventsByDay.get(key) || []).sort((a, b) =>
+    a.at.localeCompare(b.at),
+  )) {
+    const card = color(
+        el("div", null, "event" + (step.done ? " done" : "")),
+        step.category,
+      ),
+      title = button("", () => openStep(step));
+    title.append(
+      el(
+        "span",
+        step.company + "｜" + step.label + (step.estimated ? "（估算）" : ""),
+        "event-title",
+      ),
+      el("span", fmt(step.at).slice(11), "time"),
+    );
+    title.title = step.role + " · " + step.action;
+    card.append(
+      checkbox(
+        step.done,
+        (v, c) => change("step", step, v, c),
+        "完成 " + step.company + " " + step.label,
+      ),
+      title,
+    );
+    cell.append(card);
+  }
+  return cell;
+}
+function captureCalendarPosition() {
+  const scroller = $(".calendar-scroll");
+  if (!scroller || calendarJump) return;
+  const edge =
+    scroller.getBoundingClientRect().top +
+    scroller.querySelector(".week").offsetHeight;
+  const row = [...scroller.querySelectorAll(".calendar-week")].find(
+    (r) => r.getBoundingClientRect().bottom > edge + 1,
+  );
+  if (row)
+    calendarAnchor = {
+      day: row.dataset.day,
+      offset: row.getBoundingClientRect().top - edge,
+      left: scroller.scrollLeft,
+    };
+}
+function buildScrollingCalendar(calendar, week, eventsByDay, title) {
+  const scroller = el("div", null, "calendar-scroll");
+  scroller.tabIndex = 0;
+  scroller.setAttribute("role", "region");
+  scroller.setAttribute("aria-label", "连续月历，上下滚动查看日期");
+  const target =
+    calendarJump ||
+    calendarAnchor?.day ||
+    new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" });
+  const savedOffset = calendarJump ? 0 : calendarAnchor?.offset || 0;
+  calendarJump = null;
+  const first = new Date(target + "T00:00:00Z");
+  first.setUTCDate(first.getUTCDate() - ((first.getUTCDay() + 6) % 7));
+  const rows = el("div", null, "calendar-weeks");
+  function rowAt(date) {
+    const row = el("div", null, "days calendar-week");
+    row.dataset.day = date.toISOString().slice(0, 10);
+    for (let d = 0; d < 7; d++) {
+      const day = new Date(date);
+      day.setUTCDate(day.getUTCDate() + d);
+      row.append(calendarDay(day, eventsByDay, true));
+    }
+    return row;
+  }
+  for (let w = -8; w < 20; w++) {
+    const date = new Date(first);
+    date.setUTCDate(date.getUTCDate() + w * 7);
+    rows.append(rowAt(date));
+  }
+  scroller.append(week, rows);
+  calendar.append(scroller);
+  let frame = null;
+  function scrollUpdate() {
+    if (!scroller.isConnected) return;
+    if (scroller.scrollTop < 250) {
+      const oldHeight = rows.offsetHeight,
+        oldTop = scroller.scrollTop;
+      const firstDate = new Date(rows.firstChild.dataset.day + "T00:00:00Z");
+      const fragment = document.createDocumentFragment();
+      for (let w = -12; w < 0; w++) {
+        const date = new Date(firstDate);
+        date.setUTCDate(date.getUTCDate() + w * 7);
+        fragment.append(rowAt(date));
+      }
+      rows.prepend(fragment);
+      scroller.scrollTop = oldTop + rows.offsetHeight - oldHeight;
+      while (rows.children.length > 64) rows.lastChild.remove();
+    } else if (
+      scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <
+      350
+    ) {
+      const lastDate = new Date(rows.lastChild.dataset.day + "T00:00:00Z");
+      for (let w = 1; w <= 12; w++) {
+        const date = new Date(lastDate);
+        date.setUTCDate(date.getUTCDate() + w * 7);
+        rows.append(rowAt(date));
+      }
+      let removed = 0;
+      while (rows.children.length > 64) {
+        removed += rows.firstChild.offsetHeight;
+        rows.firstChild.remove();
+      }
+      scroller.scrollTop -= removed;
+    }
+    captureCalendarPosition();
+    if (calendarAnchor) {
+      const date = new Date(calendarAnchor.day + "T00:00:00Z");
+      date.setUTCDate(date.getUTCDate() + 3);
+      month = date.toISOString().slice(0, 7);
+      title.textContent = month.replace("-", " 年 ") + " 月";
+    }
+  }
+  scroller.onscroll = () => {
+    if (frame === null)
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        scrollUpdate();
+      });
+  };
+  requestAnimationFrame(() => {
+    if (!scroller.isConnected) return;
+    const row = rows.querySelector(
+      '[data-day="' + first.toISOString().slice(0, 10) + '"]',
+    );
+    scroller.scrollTop = row.offsetTop - week.offsetHeight - savedOffset;
+    scroller.scrollLeft = calendarAnchor?.left || 0;
+    scrollUpdate();
+  });
+}
+
 function moveMonth(delta) {
   const d = new Date(month + "-01T00:00:00Z");
   d.setUTCMonth(d.getUTCMonth() + delta);
@@ -345,7 +553,7 @@ function renderSteps(main) {
     const row = el("tr"),
       company = el("div");
     company.append(
-      button(s.company, () => openMail(s.mail_id), "link"),
+      button(s.company, () => openStep(s), "link"),
       el("div", s.role, "small"),
     );
     const action = el("div");
@@ -407,6 +615,155 @@ function renderEmails(main) {
   }
   main.append(panel);
   if (!emails.length) main.append(el("div", "没有符合条件的邮件", "empty"));
+}
+function openStep(step) {
+  if (step.source === "manual")
+    openManual(data.manual_events.find((e) => e.id === step.manual_id));
+  else openMail(step.mail_id);
+}
+function openManual(event = null) {
+  selected = null;
+  dirtyNotes = false;
+  const requestId = event?.id || crypto.randomUUID();
+  $("#detail-title").textContent = event ? "编辑日程" : "新建日程";
+  const body = $("#detail-body");
+  body.replaceChildren();
+  const form = el("form", null, "manual-form"),
+    fields = {};
+  for (const [key, label, type] of [
+    ["title", "标题", "text"],
+    ["start", "开始时间（北京时间）", "datetime-local"],
+    ["deadline", "截止时间（北京时间）", "datetime-local"],
+    ["notes", "备注", "textarea"],
+  ]) {
+    const row = el("label", label),
+      input = el(type === "textarea" ? "textarea" : "input");
+    if (type !== "textarea") input.type = type;
+    input.setAttribute("aria-label", label);
+    input.value =
+      key === "start" || key === "deadline"
+        ? event?.[key]
+          ? fmt(event[key]).replace(" ", "T")
+          : ""
+        : event?.[key] || "";
+    if (key === "title") {
+      input.required = true;
+      input.maxLength = 200;
+    }
+    if (key === "notes") input.maxLength = 10000;
+    fields[key] = input;
+    row.append(input);
+    form.append(row);
+  }
+  form.append(
+    el(
+      "div",
+      "至少填写一个时间；开始和截止会分别显示，完成状态共用。",
+      "small",
+    ),
+  );
+  const error = el("div", null, "form-error");
+  error.setAttribute("role", "status");
+  form.append(error);
+  const actions = el("div", null, "detail-buttons"),
+    save = el("button", "保存日程", "primary");
+  save.type = "submit";
+  actions.append(save);
+  if (event) {
+    const done = el("label", null, "toolbar-group");
+    done.append(
+      checkbox(
+        event.done,
+        async (value, input) => {
+          input.disabled = true;
+          try {
+            data = await api("/api/manual", {
+              op: "complete",
+              id: event.id,
+              version: event.version,
+              done: value,
+            });
+            event = data.manual_events.find((e) => e.id === event.id);
+            input.disabled = false;
+            render();
+            tell(value ? "已完成" : "已恢复待办");
+          } catch (e) {
+            input.checked = !value;
+            input.disabled = false;
+            error.textContent = e.message;
+          }
+        },
+        "日程已完成",
+      ),
+      el("span", "已完成"),
+    );
+    form.append(done);
+    actions.append(
+      button(
+        "删除日程",
+        async () => {
+          try {
+            data = await api("/api/manual", {
+              op: "delete",
+              id: event.id,
+              version: event.version,
+            });
+            render();
+            $("#detail").close();
+            tell("日程已删除 ");
+            $("#message").append(
+              button(
+                "撤销",
+                async () => {
+                  try {
+                    data = await api("/api/manual", {
+                      op: "restore",
+                      id: event.id,
+                      version: event.version + 1,
+                    });
+                    render();
+                    tell("日程已恢复");
+                  } catch (e) {
+                    tell(e.message, true);
+                  }
+                },
+                "link",
+              ),
+            );
+          } catch (e) {
+            error.textContent = e.message;
+          }
+        },
+        "danger",
+      ),
+    );
+  }
+  form.append(actions);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    save.disabled = true;
+    const value = {
+      op: event ? "update" : "create",
+      id: requestId,
+      version: event?.version,
+      title: fields.title.value,
+      notes: fields.notes.value,
+    };
+    for (const key of ["start", "deadline"])
+      value[key] = fields[key].value ? fields[key].value + ":00+08:00" : null;
+    try {
+      data = await api("/api/manual", value);
+      render();
+      $("#detail").close();
+      tell("日程已保存");
+    } catch (err) {
+      error.textContent = err.message;
+      save.disabled = false;
+    }
+  };
+  body.append(form);
+  if (!$("#detail").open) $("#detail").showModal();
+  document.body.classList.add("modal-open");
 }
 function openMail(id) {
   selected = id;
@@ -619,6 +976,10 @@ async function renderSettings(main) {
     if (page !== "settings") return;
     const form = el("form", null, "panel settings"),
       fields = {};
+    form.oninput = () => {
+      form.dataset.dirty = "true";
+    };
+    form.append(el("h2", "模型设置"));
     for (const [key, title] of [
       ["model", "首选模型"],
       ["fallback", "后备模型"],
@@ -643,18 +1004,7 @@ async function renderSettings(main) {
     }
     const save = el("button", "保存设置", "primary");
     save.type = "submit";
-    form.append(
-      save,
-      el(
-        "p",
-        "CodeBuddy CN CLI · 邮箱凭证" +
-          (config.credentials_saved ? "已保存在本机。" : "未配置。"),
-      ),
-      el(
-        "p",
-        "独立版未启用自动检查，原项目的定时任务未改动。关闭全部页面后空闲 2 分钟自动退出。",
-      ),
-    );
+    form.append(save);
     form.onsubmit = async (e) => {
       e.preventDefault();
       try {
@@ -664,12 +1014,81 @@ async function renderSettings(main) {
             Object.entries(fields).map(([k, v]) => [k, v.value]),
           ),
         );
+        form.dataset.dirty = "false";
         tell("设置已保存");
       } catch (e) {
         tell(e.message, true);
       }
     };
     main.append(form);
+    const schedule = config.schedule;
+    if (!schedule?.installed || schedule.error) {
+      main.append(el("div", schedule?.error || "尚未配置自动检查", "small"));
+      return;
+    }
+    const timerForm = el("form", null, "panel settings scheduler-settings");
+    timerForm.oninput = () => {
+      timerForm.dataset.dirty = "true";
+    };
+    timerForm.append(el("h2", "定时扫描"));
+    const timerFields = {};
+    for (const [key, label, min, max, step] of [
+      ["interval_hours", "检查间隔（小时）", 0.25, 168, 0.25],
+      ["logon_delay_minutes", "登录后延迟（分钟）", 0, 1440, 1],
+      ["retry_minutes", "失败重试间隔（分钟）", 1, 1440, 1],
+      ["retry_count", "最多重试次数", 1, 10, 1],
+    ]) {
+      const labelEl = el("label", label),
+        input = el("input");
+      input.type = "number";
+      input.required = true;
+      input.min = min;
+      input.max = max;
+      input.step = step;
+      input.value = schedule[key];
+      input.setAttribute("aria-label", label);
+      timerFields[key] = input;
+      labelEl.append(input);
+      timerForm.append(labelEl);
+    }
+    const timerStatus = el(
+      "p",
+      "下次检查：" + fmt(schedule.next_run) + "（北京时间）",
+    );
+    const timerError = el("div", null, "form-error");
+    timerError.setAttribute("role", "status");
+    const timerSave = el("button", "保存定时设置", "primary");
+    timerSave.type = "submit";
+    timerForm.append(timerStatus, timerError, timerSave);
+    timerForm.onsubmit = async (e) => {
+      e.preventDefault();
+      timerSave.disabled = true;
+      timerSave.textContent = "保存中…";
+      timerError.textContent = "";
+      try {
+        const actual = await api(
+          "/api/schedule",
+          Object.fromEntries(
+            Object.entries(timerFields).map(([key, input]) => [
+              key,
+              Number(input.value),
+            ]),
+          ),
+        );
+        data.schedule = actual;
+        timerStatus.textContent =
+          "下次检查：" + fmt(actual.next_run) + "（北京时间）";
+        timerForm.dataset.dirty = "false";
+        render();
+        tell("定时设置已保存 · 下次 " + fmt(actual.next_run) + "（北京时间）");
+      } catch (error) {
+        timerError.textContent = error.message;
+      } finally {
+        timerSave.disabled = false;
+        timerSave.textContent = "保存定时设置";
+      }
+    };
+    main.append(timerForm);
   } catch (e) {
     tell(e.message, true);
   }
