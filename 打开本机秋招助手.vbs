@@ -4,4 +4,4 @@ Set shell = CreateObject("WScript.Shell")
 Set files = CreateObject("Scripting.FileSystemObject")
 root = files.GetParentFolderName(WScript.ScriptFullName)
 shell.CurrentDirectory = root
-shell.Run """D:\APP\miniconda\pythonw.exe"" """ & root & "\app\launch.py""", 0, False
+shell.Run "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & root & "\tools\open_app.ps1""", 0, False

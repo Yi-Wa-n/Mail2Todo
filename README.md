@@ -60,9 +60,17 @@ Copy-Item config.example.json private-config.json
 
 ## 定时扫描的当前限制
 
-全新安装默认不创建计划任务，可以手动扫描。`tools/scheduled_task.ps1` 是已有个人部署的迁移/维护脚本，依赖既有 Windows 任务和固定 Python 路径，**不是通用安装器，新用户不要执行 Install 模式**。已有部署的设置页可修改检查间隔、登录延迟和失败重试并回读验证。手动扫描不重置固定计划，关闭页面不影响独立的后台计划任务。
+全新安装默认不创建计划任务，可以手动扫描。`tools/scheduled_task.ps1` 的 Install 模式仍依赖旧 Windows 任务作为迁移模板，**不是通用安装器，新用户不要执行 Install 模式**。已有部署的设置页可修改检查间隔、登录延迟和失败重试并回读验证。手动扫描不重置固定计划，关闭页面不影响独立的后台计划任务。
 
-`打开本机秋招助手.vbs` 使用固定 Python 路径；新安装使用上面的 Python 命令。
+双击 `打开本机秋招助手.vbs` 可无控制台启动页面。Python 解释器依次从以下位置选择：
+
+1. `private/python-path.txt`：一行 `pythonw.exe` 路径，相对路径以项目目录为基准。可复制根目录 `python-path.example.txt`，不需要 JSON 或引号。
+2. 环境变量 `AUTUMN_PYTHON`。
+3. 项目 `.venv/Scripts/pythonw.exe`。
+4. 属于当前项目、入口匹配的现有自动任务解释器，以兼容旧部署。
+5. PATH 中的 `pythonw.exe`，或 `python.exe` 同目录的 `pythonw.exe`；不使用 Windows Store 占位入口。
+
+也接受 `python.exe` 路径，但同目录必须存在 `pythonw.exe`。显式配置无效会停止，不会悄悄换环境。启动失败记入 `private/launcher.log`，不弹窗。已有自动任务维护时优先沿用任务当前解释器，保留触发时间、重试和运行入口；修改页面启动配置不会自动迁移已注册任务的 Python。Status 模式只读任务，不依赖 Python 路径解析。
 
 ## 开发与检查
 

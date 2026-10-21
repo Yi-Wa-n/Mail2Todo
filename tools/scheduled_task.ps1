@@ -9,7 +9,9 @@ $ErrorActionPreference='Stop'
 $taskName='AutumnRecruitMail-LocalOnly'
 $oldName='AutumnRecruitMail-LocalGate'
 $root=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$python='D:\APP\miniconda\pythonw.exe'
+. (Join-Path $PSScriptRoot 'python_runtime.ps1')
+$python=$null
+if ($Mode -ne 'Status') { $python=Resolve-ProjectPython $root -PreserveTask }
 $arguments='-X utf8 -m backend.jobs.scheduled_gate'
 $folder=Join-Path $root 'private\scheduler'
 function Ns($doc) { $n=[Xml.XmlNamespaceManager]::new($doc.NameTable);$n.AddNamespace('t',$doc.DocumentElement.NamespaceURI);return ,$n }
