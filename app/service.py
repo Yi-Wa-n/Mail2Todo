@@ -51,6 +51,13 @@ class Service:
 
     def preview(self,key):return self.use(lambda db:repo.mail_preview(db,key))
 
+    def manual(self,value):
+        with self.guard,locked():
+            self.use(lambda db:repo.edit_manual(db,value))
+            result=self.state()
+        with self.changed:self.changed.notify_all()
+        return result
+
     def filtered(self,offset):
         from app.filtered import listing
         return self.use(lambda db:listing(db,offset))

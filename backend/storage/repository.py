@@ -49,6 +49,7 @@ def initialize(db):
     CREATE TABLE IF NOT EXISTS local_steps(id TEXT PRIMARY KEY,mail_id TEXT,payload TEXT,done INTEGER NOT NULL,version INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS step_mail ON local_steps(mail_id);
     CREATE TABLE IF NOT EXISTS local_overrides(mail_id TEXT PRIMARY KEY,notes TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS manual_events(id TEXT PRIMARY KEY,payload TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0,deleted INTEGER NOT NULL DEFAULT 0);
     ''')
     if not get_meta(db,'local_only_schema'):
         sync_local(db,initial=True)
@@ -129,7 +130,8 @@ def state(db):
                        'active':item['id'] not in inactive,'version':row['version']})
     emails.sort(key=lambda v:v['received'],reverse=True)
     steps.sort(key=lambda v:v['received'],reverse=True)
-    return {'revision':revision(db),'emails':emails,'steps':steps,'imported_at':get_meta(db,'local_imported_at'),
+    manual=[{**json.loads(r['payload']),'id':r['id'],'version':r['version']} for r in db.execute('SELECT * FROM manual_events WHERE deleted=0')]
+    return {'revision':revision(db),'emails':emails,'steps':steps,'manual_events':manual,'imported_at':get_meta(db,'local_imported_at'),
             'last_scan':get_meta(db,'local_gate_last_success'),'result':get_meta(db,'local_gate_last_result',{})}
 
 
@@ -177,3 +179,44 @@ def mail_preview(db,key):
     if not row:raise ValueError('原邮件不存在')
     mail=json.loads(crypt(row['payload'],decrypt=True))
     return {'subject':safe_text(mail['subject']),'received':mail['received'],'body':safe_text(mail['body'])}
+
+
+def edit_manual(db,value):
+    """Manual schedules never write any mail/step/override table. Delete is recoverable."""
+    import uuid
+    if not isinstance(value,dict):raise ValueError('无效日程')
+    try:key=str(uuid.UUID(value.get('id','')))
+    except (ValueError,TypeError,AttributeError):raise ValueError('无效日程标识') from None
+    op=value.get('op')
+    if op not in ('create','update','complete','delete','restore'):raise ValueError('无效操作')
+    row=db.execute('SELECT * FROM manual_events WHERE id=?',(key,)).fetchone()
+    if op=='create' and row:return  # Same client request is never inserted twice.
+    if op!='create':
+        if not row:raise ValueError('日程不存在')
+        if type(value.get('version')) is not int or value['version']!=row['version']:raise ValueError('日程已变化，请刷新后重试')
+        if row['deleted'] and op!='restore':raise ValueError('日程已删除')
+    payload=json.loads(row['payload']) if row else {'done':False,'created_at':now().isoformat()}
+    if op in ('create','update'):
+        title=value.get('title');notes=value.get('notes','')
+        if not isinstance(title,str) or not title.strip() or len(title)>200:raise ValueError('请填写日程标题，最多200字')
+        if not isinstance(notes,str) or len(notes)>10000:raise ValueError('备注最多10000字')
+        times={}
+        for name in ('start','deadline'):
+            raw=value.get(name)
+            if raw in (None,''):times[name]=None;continue
+            try:
+                if not isinstance(raw,str):raise ValueError()
+                parsed=dt.datetime.fromisoformat(raw)
+                if parsed.tzinfo is None or parsed.utcoffset() is None:raise ValueError()
+                times[name]=parsed.astimezone(dt.timezone(dt.timedelta(hours=8))).isoformat()
+            except (ValueError,TypeError):raise ValueError('时间必须包含时区') from None
+        if not any(times.values()):raise ValueError('至少填写开始时间或截止时间')
+        payload.update(title=title.strip(),notes=notes,**times)
+    if op=='complete':
+        if type(value.get('done')) is not bool:raise ValueError('无效完成状态')
+        payload['done']=value['done']
+    payload['updated_at']=now().isoformat()
+    with db:
+        if op=='create':db.execute('INSERT INTO manual_events(id,payload) VALUES (?,?)',(key,canonical(payload)))
+        else:db.execute('UPDATE manual_events SET payload=?,version=version+1,deleted=? WHERE id=?',(canonical(payload),int(op=='delete'),key))
+    bump(db)

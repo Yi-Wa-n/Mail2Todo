@@ -46,7 +46,13 @@ def handler(service,token,life):
             self.end_headers();self.wfile.write(raw)
 
         def do_GET(self):
-            if not self.allowed():return self.reply({'error':'仅允许本机访问'},403)
+            # A top-level link may legitimately originate outside this site.
+            # Only the static entry page is allowed; data APIs remain same-site.
+            entry_navigation=(urlsplit(self.path).path=='/' and
+                self.headers.get('Host')==f'127.0.0.1:{self.server.server_port}' and
+                self.headers.get('Sec-Fetch-Mode')=='navigate' and
+                self.headers.get('Sec-Fetch-Dest')=='document')
+            if not self.allowed() and not entry_navigation:return self.reply({'error':'仅允许本机访问'},403)
             url=urlsplit(self.path);path=url.path;query=parse_qs(url.query)
             try:
                 if path=='/api/health':return self.reply({'app':'autumn-local-only','port':PORT,'idle_seconds':life.timeout})
@@ -86,6 +92,7 @@ def handler(service,token,life):
             try:
                 raw=self.rfile.read(int(length));value=json.loads(raw or b'{}')
                 if self.path in ('/api/step','/api/email','/api/notes'):return self.reply(service.edit(self.path[5:],value))
+                if self.path=='/api/manual':return self.reply(service.manual(value))
                 if self.path=='/api/scan':return self.reply({'started':service.scan()})
                 if self.path=='/api/settings':return self.reply(service.save_settings(value))
                 self.reply({'error':'操作不存在'},404)

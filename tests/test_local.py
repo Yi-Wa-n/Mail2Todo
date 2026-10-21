@@ -41,6 +41,46 @@ class LocalTasks(unittest.TestCase):
         remaining=next(x for x in state['steps'] if not x['done']);self.edit('step',remaining,done=True)
         self.assertTrue(self.state()['emails'][0]['done'])
 
+    def create_manual(self,**overrides):
+        import uuid
+        value={'op':'create','id':str(uuid.uuid4()),'title':'手动测试日程','start':'2026-10-24T14:00:00+08:00','deadline':'2026-10-24T16:00:00+08:00','notes':'备注'}
+        value.update(overrides);repo.edit_manual(self.db,value);return value
+
+    def test_manual_lifecycle_preserves_every_mail_table(self):
+        names=['mails','records','local_steps','local_overrides','mail_index']
+        before={name:[tuple(row) for row in self.db.execute('SELECT * FROM '+name)] for name in names}
+        request=self.create_manual();repo.edit_manual(self.db,request)
+        self.assertEqual(1,len(self.state()['manual_events']))
+        item=self.state()['manual_events'][0]
+        repo.edit_manual(self.db,{**item,'op':'update','title':'已编辑标题','notes':'新备注'})
+        item=self.state()['manual_events'][0]
+        repo.edit_manual(self.db,{**item,'op':'complete','done':True})
+        item=self.state()['manual_events'][0];self.assertTrue(item['done']);self.assertEqual('新备注',item['notes'])
+        self.assertEqual(before,{name:[tuple(row) for row in self.db.execute('SELECT * FROM '+name)] for name in names})
+        repo.sync_local(self.db);self.assertTrue(self.state()['manual_events'][0]['done'])
+        # Local mail sync may acknowledge hashes, but manual edits alone never touch mail tables.
+        before={name:[tuple(row) for row in self.db.execute('SELECT * FROM '+name)] for name in names}
+        repo.edit_manual(self.db,{**item,'op':'delete'})
+        self.assertFalse(self.state()['manual_events'])
+        repo.edit_manual(self.db,{**item,'op':'restore','version':item['version']+1})
+        item=self.state()['manual_events'][0];self.assertTrue(item['done'])
+        repo.edit_manual(self.db,{**item,'op':'complete','done':False})
+        after={name:[tuple(row) for row in self.db.execute('SELECT * FROM '+name)] for name in names}
+        self.assertEqual(before,after);self.assertFalse(self.state()['manual_events'][0]['done'])
+        self.db.close();self.db=core.open_db(Path(self.temp.name)/'test.sqlite3');repo.initialize(self.db)
+        self.assertEqual('已编辑标题',self.state()['manual_events'][0]['title'])
+
+    def test_manual_invalid_time_and_stale_edit_rejected(self):
+        for values in [{'start':None,'deadline':None},{'start':'2026-10-24T14:00:00'},{'title':''}]:
+            with self.assertRaises(ValueError):self.create_manual(**values)
+        self.create_manual();item=self.state()['manual_events'][0]
+        repo.edit_manual(self.db,{**item,'op':'complete','done':True})
+        with self.assertRaises(ValueError):repo.edit_manual(self.db,{**item,'op':'delete'})
+
+    def test_manual_confirmation_deadline_may_precede_start(self):
+        self.create_manual(deadline='2026-10-23T12:00:00+08:00')
+        self.assertEqual('2026-10-23T12:00:00+08:00',self.state()['manual_events'][0]['deadline'])
+
     def test_email_check_and_uncheck_control_all_steps(self):
         self.edit('email',self.state()['emails'][0],done=True)
         self.assertTrue(all(x['done'] for x in self.state()['steps']))

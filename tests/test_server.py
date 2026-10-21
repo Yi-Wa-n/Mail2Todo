@@ -11,6 +11,7 @@ class FakeService:
     def edit(self,kind,value):
         if value.get('stale'):raise ValueError('记录已变化')
         return {'saved':kind}
+    def manual(self,value):return {'manual':value['op']}
 
 
 class ServerTests(unittest.TestCase):
@@ -35,11 +36,15 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(403,self.request('/api/state',headers={'Host':'evil.invalid'})[0])
         self.assertEqual(403,self.request('/api/state',headers={'Sec-Fetch-Site':'cross-site'})[0])
         self.assertEqual(403,self.request('/api/email','POST',{})[0])
+        navigation={'Sec-Fetch-Site':'cross-site','Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'}
+        self.assertEqual(200,self.request('/',headers=navigation)[0])
+        self.assertEqual(403,self.request('/api/state',headers=navigation)[0])
 
     def test_authenticated_mutation_and_conflict(self):
         headers={'Origin':f'http://127.0.0.1:{self.port}','X-Local-Token':'test-token'}
         self.assertEqual(200,self.request('/api/email','POST',{},headers)[0])
         self.assertEqual(409,self.request('/api/email','POST',{'stale':True},headers)[0])
+        self.assertEqual(200,self.request('/api/manual','POST',{'op':'create'},headers)[0])
 
     def test_browser_stream_and_scan_protect_idle_exit(self):
         clock=[0];life=IdleLifecycle(timeout=120,clock=lambda:clock[0])
