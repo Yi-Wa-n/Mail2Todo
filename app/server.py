@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import secrets
 import socket
+import subprocess
+import sys
 import threading
 from urllib.parse import urlsplit,parse_qs
 import urllib.request
@@ -12,6 +14,7 @@ import webbrowser
 
 from app.lifecycle import IdleLifecycle
 from app.service import Service
+from backend.cli.manager import locked
 
 WEB=Path(__file__).with_name('web')
 PORT=18765
@@ -55,7 +58,7 @@ def handler(service,token,life):
             if not self.allowed() and not entry_navigation:return self.reply({'error':'仅允许本机访问'},403)
             url=urlsplit(self.path);path=url.path;query=parse_qs(url.query)
             try:
-                if path=='/api/health':return self.reply({'app':'autumn-local-only','port':PORT,'idle_seconds':life.timeout})
+                if path=='/api/health':return self.reply({'app':'autumn-local-only','port':self.server.server_port,'idle_seconds':life.timeout,'instance':life.instance})
                 if path=='/api/state':return self.reply(service.state())
                 if path=='/api/settings':return self.reply(service.settings())
                 if path=='/api/audits':return self.reply(service.audits())
@@ -73,6 +76,9 @@ def handler(service,token,life):
                         while not life.stop_event.is_set():
                             self.wfile.write(('data: '+service.version()+'\n\n').encode());self.wfile.flush()
                             with service.changed:service.changed.wait(timeout=5)
+                        if life.action:
+                            message=json.dumps({'action':life.action,'instance':life.instance})
+                            self.wfile.write(('event: service-control\ndata: '+message+'\n\n').encode());self.wfile.flush()
                     except (OSError,ValueError):pass
                     self.close_connection=True;return
                 assets={'/':('index.html','text/html; charset=utf-8'),'/app.js':('app.js','text/javascript; charset=utf-8'),'/style.css':('style.css','text/css; charset=utf-8')}
@@ -91,17 +97,41 @@ def handler(service,token,life):
             if self.headers.get('Transfer-Encoding') or not length.isdigit() or int(length)>65536:return self.reply({'error':'请求过大'},400)
             try:
                 raw=self.rfile.read(int(length));value=json.loads(raw or b'{}')
-                if self.path in ('/api/step','/api/email','/api/notes'):return self.reply(service.edit(self.path[5:],value))
-                if self.path=='/api/manual':return self.reply(service.manual(value))
-                if self.path=='/api/scan':return self.reply({'started':service.scan()})
-                if self.path=='/api/settings':return self.reply(service.save_settings(value))
-                if self.path=='/api/mailbox':return self.reply(service.mailbox(value))
-                if self.path=='/api/schedule':return self.reply(service.save_schedule(value))
-                self.reply({'error':'操作不存在'},404)
+                if self.path=='/api/control':
+                    if not isinstance(value,dict) or set(value)!={'action'} or value['action'] not in ('exit','restart'):raise ValueError('无效服务操作')
+                    try:
+                        with locked():
+                            life.begin_control(value['action'],busy=service.is_busy())
+                    except RuntimeError:
+                        raise ValueError('正在扫描或保存，请完成后再退出或重启') from None
+                    try:self.reply({'action':life.action,'instance':life.instance})
+                    finally:stop_server(self.server,service,life)
+                    return
+                with life.mutation():
+                    if self.path in ('/api/step','/api/email','/api/notes'):return self.reply(service.edit(self.path[5:],value))
+                    if self.path=='/api/manual':return self.reply(service.manual(value))
+                    if self.path=='/api/scan':return self.reply({'started':service.scan()})
+                    if self.path=='/api/settings':return self.reply(service.save_settings(value))
+                    if self.path=='/api/mailbox':return self.reply(service.mailbox(value))
+                    if self.path=='/api/schedule':return self.reply(service.save_schedule(value))
+                    self.reply({'error':'操作不存在'},404)
             except ValueError as error:self.reply({'error':str(error)},409)
             except RuntimeError:self.reply({'error':'本机版正在处理，请稍后重试'},409)
             except OSError:self.reply({'error':'保存失败，请稍后重试'},503)
     return Handler
+
+
+def stop_server(server,service,life):
+    life.stop_event.set()
+    with service.changed:service.changed.notify_all()
+    threading.Thread(target=server.shutdown,daemon=True).start()
+
+
+def restart_service(port):
+    subprocess.Popen([sys.executable,'-X','utf8','-m','app.server','--no-open','--port',str(port)],
+                     cwd=Path(__file__).resolve().parents[1],stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                     creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
 
 
 def main():
@@ -119,7 +149,11 @@ def main():
     threading.Thread(target=life.watch,args=(server,service.is_busy),daemon=True).start()
     if not args.no_open:webbrowser.open(url)
     try:server.serve_forever()
-    finally:life.stop_event.set();server.server_close()
+    finally:
+        life.stop_event.set()
+        with service.changed:service.changed.notify_all()
+        server.server_close()
+    if life.action=='restart':restart_service(args.port)
 
 
 if __name__=='__main__':main()

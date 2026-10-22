@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import threading
 import time
+import uuid
 
 IDLE_SECONDS = 120
 
@@ -15,6 +16,9 @@ class IdleLifecycle:
         self._active = 0
         self._last_activity = clock()
         self._closing = False
+        self._writes = 0
+        self.action = None
+        self.instance = str(uuid.uuid4())
 
     @contextmanager
     def request(self):
@@ -28,6 +32,29 @@ class IdleLifecycle:
             with self._lock:
                 self._active -= 1
                 self._last_activity = self.clock()
+
+    @contextmanager
+    def mutation(self):
+        with self._lock:
+            if self._closing:
+                raise ValueError('服务正在退出或重启，请稍后重新打开')
+            self._writes += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._writes -= 1
+
+    def begin_control(self, action, busy=False):
+        if action not in ('exit', 'restart'):
+            raise ValueError('无效服务操作')
+        with self._lock:
+            if self._closing:
+                raise ValueError('服务正在退出或重启，请稍后重新打开')
+            if self._writes or busy:
+                raise ValueError('正在扫描或保存，请完成后再退出或重启')
+            self._closing = True
+            self.action = action
 
     def should_stop(self, busy=False):
         with self._lock:

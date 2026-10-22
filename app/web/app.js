@@ -42,6 +42,7 @@ let emailPage = 1,
   agendaAnchor = null,
   agendaJump = false;
 let contentRevision = 0, settingsRequest = null, settingsCache = null;
+let pendingWrites = 0, controlRequested = false, serviceChanging = false;
 function loadSettings() {
   if (!settingsRequest) {
     settingsRequest = api("/api/settings")
@@ -101,6 +102,10 @@ async function api(path, value) {
   if (value !== undefined && ["/api/step", "/api/email", "/api/notes", "/api/manual", "/api/mailbox"].includes(path)) {
     value = { ...value, account: data?.account };
   }
+  const writing = value !== undefined && path !== "/api/control";
+  if (writing && (controlRequested || serviceChanging)) throw Error("服务正在退出或重启，请稍后再操作");
+  if (writing) pendingWrites++;
+  try {
   const response = await fetch(
     path,
     value === undefined
@@ -117,9 +122,12 @@ async function api(path, value) {
   const result = await response.json();
   if (!response.ok) throw Error(result.error || "请求失败");
   return result;
+  } finally {
+    if (writing) pendingWrites--;
+  }
 }
 async function refresh(feedback = false) {
-  if (loading) return;
+  if (loading || serviceChanging) return;
   loading = true;
   $("#refresh").disabled = true;
   try {
@@ -263,6 +271,7 @@ function visibleSteps() {
     .filter((s) => s.active && (showDone || !s.done) && matches(s));
 }
 function render() {
+  if (serviceChanging) return;
   if (!data) return;
   $("#title").textContent = pages[page];
   $("#nav").replaceChildren(
@@ -1495,7 +1504,67 @@ async function renderSettings(main, revision) {
     tell(e.message, true);
   }
 }
+function hasUnsavedChanges() {
+  return dirtyNotes || !!document.querySelector('#detail[open] .manual-form[data-dirty="true"], .settings[data-dirty="true"]');
+}
+async function serviceTransition(action, instance) {
+  if (serviceChanging) return;
+  serviceChanging = true;
+  stream?.close(); stream = null;
+  if (!hasUnsavedChanges()) document.body.classList.add("service-changing");
+  $("#restart-service").disabled = $("#exit-service").disabled = true;
+  $("#connection").textContent = action === "restart" ? "正在重启…" : "正在退出…";
+  tell(action === "restart" ? "服务正在重启，完成后自动刷新。" : "正在退出助手…");
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    let health = null;
+    try {
+      const response = await fetch("/api/health", { cache: "no-store", signal: AbortSignal.timeout(1500) });
+      if (response.ok) health = await response.json();
+    } catch {}
+    if (action === "exit" && !health) {
+      $("#connection").textContent = "助手已退出";
+      tell("助手已退出，可关闭此页面；下次双击入口即可打开。定时检查任务仍按原设置运行。");
+      return;
+    }
+    if (action === "restart" && health?.app === "autumn-local-only" && health.instance && health.instance !== instance) {
+      if (hasUnsavedChanges()) {
+        tell("服务已重启。本页有未保存内容，已保留页面；请先复制内容，再刷新重新连接。", true);
+        $("#connection").textContent = "服务已重启，请刷新";
+      } else window.location.reload();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  $("#connection").textContent = "服务状态未确认";
+  tell("未能确认服务状态，请从本机入口重新打开助手。", true);
+}
+async function controlService(action) {
+  if (controlRequested || serviceChanging) return;
+  if (pendingWrites) return tell("正在保存，请完成后再退出或重启。", true);
+  if (data?.job.running) return tell("正在扫描，请结束后再退出或重启。", true);
+  if (hasUnsavedChanges()) return tell("有未保存的改动，请先保存或取消编辑，再退出或重启。", true);
+  controlRequested = true;
+  $("#restart-service").disabled = $("#exit-service").disabled = true;
+  try {
+    const result = await api("/api/control", { action });
+    await serviceTransition(result.action, result.instance);
+  } catch (error) {
+    tell(error.message === "操作不存在"
+      ? "当前运行的是旧版服务。首次启用请关闭所有助手页面，等待约 2 分钟后重新打开，之后即可直接使用退出和重启按钮。"
+      : error.message, true);
+  } finally {
+    controlRequested = false;
+    if (!serviceChanging) $("#restart-service").disabled = $("#exit-service").disabled = false;
+  }
+}
 $("#refresh").onclick = () => refresh(true);
+$("#restart-service").onclick = () => controlService("restart");
+$("#exit-service").onclick = () => controlService("exit");
+document.addEventListener("input", (event) => {
+  const form = event.target.closest(".manual-form");
+  if (form && event.target.type !== "checkbox") form.dataset.dirty = "true";
+});
 $("#scan").onclick = async () => {
   try {
     const result = await api("/api/scan", {});
@@ -1513,13 +1582,19 @@ $("#detail").addEventListener("close", () => {
   document.body.classList.remove("modal-open");
 });
 function connect() {
-  if (stream) return;
+  if (stream || serviceChanging) return;
   stream = new EventSource("/api/session?token=" + encodeURIComponent(token));
+  stream.addEventListener("service-control", (event) => {
+    const value = JSON.parse(event.data);
+    serviceTransition(value.action, value.instance);
+  });
   stream.onopen = () => {
+    if (serviceChanging) return;
     $("#connection").textContent = data ? "本机已连接" : "正在读取记录…";
     if (!data && !loading) refresh();
   };
   stream.onmessage = (e) => {
+    if (serviceChanging) return;
     if (data && e.data !== data.version) {
       const wasRunning = data.job.running;
       refresh().then(() => {
@@ -1529,6 +1604,7 @@ function connect() {
     }
   };
   stream.onerror = () => {
+    if (serviceChanging) return;
     $("#connection").textContent = "连接中断，正在重连";
   };
 }
