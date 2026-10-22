@@ -767,6 +767,109 @@ function openStep(step) {
     openManual(data.manual_events.find((e) => e.id === step.manual_id));
   else openMail(step.mail_id);
 }
+function manualDateTime(label, initial = "") {
+  const group = el("fieldset", null, "manual-datetime");
+  group.append(el("legend", label));
+  const input = el("input");
+  input.type = "text";
+  input.inputMode = "numeric";
+  input.placeholder = "例如：2026-10-22 14:30";
+  input.setAttribute("aria-label", label);
+  input.autocomplete = "off";
+  input.value = initial.replace("T", " ");
+  function format(digits) {
+    let result = digits.slice(0, 4);
+    for (const [offset, separator] of [[4, "-"], [6, "-"], [8, " "], [10, ":"]])
+      if (digits.length > offset) result += separator + digits.slice(offset, offset + 2);
+    return result;
+  }
+  function validate() {
+    const digits = input.value.replace(/\D/g, "");
+    let message = "";
+    if (digits) {
+      if (digits.length !== 12) message = "请填写完整的日期和时间";
+      else {
+        const year = Number(digits.slice(0, 4)), month = Number(digits.slice(4, 6));
+        const day = Number(digits.slice(6, 8)), hour = Number(digits.slice(8, 10));
+        const minute = Number(digits.slice(10, 12));
+        const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+        const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+        if (year < 1 || !days || day < 1 || day > days || hour > 23 || minute > 59)
+          message = "请输入有效的日期和时间";
+      }
+    }
+    input.setCustomValidity(message);
+  }
+  input.oninput = () => {
+    const before = input.value.slice(0, input.selectionStart).replace(/\D/g, "").length;
+    const digits = input.value.replace(/\D/g, "").slice(0, 12);
+    input.value = format(digits);
+    let caret = 0, count = 0;
+    while (caret < input.value.length && count < before) {
+      if (/\d/.test(input.value[caret])) count++;
+      caret++;
+    }
+    input.setSelectionRange(caret, caret);
+    validate();
+  };
+  const picker = el("input");
+  picker.type = "datetime-local";
+  picker.min = "0001-01-01T00:00";
+  picker.max = "9999-12-31T23:59";
+  picker.step = "60";
+  picker.className = "datetime-native-picker";
+  picker.tabIndex = -1;
+  picker.setAttribute("aria-label", label + "：日历选择");
+  const choose = button("", () => {
+    picker.value = input.validationMessage ? "" : input.value.replace(" ", "T");
+    picker.showPicker();
+  }, "datetime-choose");
+  choose.type = "button";
+  choose.setAttribute("aria-label", label + "：打开日历");
+  choose.title = "打开日历";
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("aria-hidden", "true");
+  const outline = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  outline.setAttribute("d", "M7 3v4m10-4v4M4 10h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z M8 14h2m4 0h2m-8 3h2m4 0h2");
+  icon.append(outline);
+  choose.append(icon);
+  picker.oninput = () => {
+    if (!picker.value || picker.validity.valid) {
+      input.value = picker.value.replace("T", " ");
+      validate();
+    }
+  };
+  input.addEventListener("input", () => {
+    picker.value = input.validationMessage ? "" : input.value.replace(" ", "T");
+  });
+  const entry = el("div", null, "datetime-entry");
+  entry.append(input, choose, picker);
+  const clear = button("×", () => { input.value = ""; picker.value = ""; validate(); input.dispatchEvent(new Event("input", { bubbles: true })); input.focus(); }, "datetime-clear");
+  clear.type = "button";
+  clear.setAttribute("aria-label", label + "：清空时间");
+  clear.title = "清空时间";
+  entry.append(clear);
+  group.append(entry);
+  validate();
+  return { element: group, get value() { return input.value.replace(" ", "T"); } };
+}
+function confirmManualDeletion(form, title) {
+  if (form.querySelector(".delete-confirmation")) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const panel = el("div", null, "delete-confirmation");
+    panel.setAttribute("role", "group");
+    panel.setAttribute("aria-label", "确认删除日程");
+    panel.append(el("div", `确定删除日程“${title}”吗？`));
+    const cancel = button("取消", () => { panel.remove(); resolve(false); });
+    const confirm = button("确认删除", () => { panel.remove(); resolve(true); }, "danger");
+    cancel.type = confirm.type = "button";
+    panel.append(cancel, confirm);
+    form.append(panel);
+    panel.scrollIntoView({ block: "nearest" });
+    cancel.focus();
+  });
+}
 function openManual(event = null) {
   selected = null;
   dirtyNotes = false;
@@ -782,6 +885,11 @@ function openManual(event = null) {
     ["deadline", "截止时间（北京时间）", "datetime-local"],
     ["notes", "备注", "textarea"],
   ]) {
+    if (type === "datetime-local") {
+      fields[key] = manualDateTime(label, event?.[key] ? fmt(event[key]).replace(" ", "T") : "");
+      form.append(fields[key].element);
+      continue;
+    }
     const row = el("label", label),
       input = el(type === "textarea" ? "textarea" : "input");
     if (type !== "textarea") input.type = type;
@@ -848,6 +956,7 @@ function openManual(event = null) {
       button(
         "删除日程",
         async () => {
+          if (!await confirmManualDeletion(form, event.title)) return;
           try {
             data = await api("/api/manual", {
               op: "delete",
@@ -1311,6 +1420,7 @@ $("#scan").onclick = async () => {
 };
 $("#close-detail").onclick = () => $("#detail").close();
 $("#detail").addEventListener("close", () => {
+  $("#detail-body").scrollTop = 0;
   selected = null;
   dirtyNotes = false;
   document.body.classList.remove("modal-open");
