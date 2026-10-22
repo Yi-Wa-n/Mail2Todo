@@ -38,6 +38,7 @@ try {
   if (emailPageSizes.includes(saved)) emailPageSize = saved;
 } catch {}
 let emailRecordFilter = "active";
+let stepTimeFilter = "all";
 let emailPage = 1,
   agendaAnchor = null,
   agendaJump = false;
@@ -189,8 +190,9 @@ async function change(kind, item, done, input) {
     await refresh();
   }
 }
-function navigate(name) {
+function navigate(name, options = {}) {
   page = name;
+  stepTimeFilter = name === "steps" && options.undated ? "undated" : "all";
   query = "";
   filterOffset = 0;
   emailPage = 1;
@@ -401,8 +403,8 @@ function renderCalendar(main) {
   if (undated)
     main.append(
       button(
-        undated + " 项时间待核实 → 查看待办步骤",
-        () => navigate("steps"),
+        undated + " 项待办尚无时间 · 查看",
+        () => navigate("steps", { undated: true }),
         "link",
       ),
     );
@@ -644,8 +646,16 @@ function td(node, cls) {
   return cell;
 }
 function renderSteps(main) {
-  const steps = visibleSteps();
-  main.append(controls(steps.length + " 个步骤"));
+  const steps = visibleSteps().filter((s) => stepTimeFilter !== "undated" || !s.at);
+  const bar = controls(steps.length + " 个步骤");
+  const label = el("label", "时间 ", "toolbar-group"), filter = el("select");
+  filter.setAttribute("aria-label", "待办时间筛选");
+  for (const [value, text] of [["all", "全部"], ["undated", "尚无时间"]]) {
+    const option = el("option", text); option.value = value; filter.append(option);
+  }
+  filter.value = stepTimeFilter;
+  filter.onchange = () => { stepTimeFilter = filter.value; renderContent(); };
+  label.append(filter); bar.lastChild.append(label); main.append(bar);
   const { panel, tbody } = table([
     "已完成",
     "公司 / 岗位",
