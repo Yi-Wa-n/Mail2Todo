@@ -1524,7 +1524,12 @@ async function serviceTransition(action, instance) {
     } catch {}
     if (action === "exit" && !health) {
       $("#connection").textContent = "助手已退出";
-      tell("助手已退出，可关闭此页面；下次双击入口即可打开。定时检查任务仍按原设置运行。");
+      if (hasUnsavedChanges()) {
+        tell("助手已退出。本页有未保存内容，已保留页面；请先复制内容，再关闭页面。", true);
+      } else {
+        tell("助手已退出；若页面未自动关闭，可手动关闭。下次双击入口即可打开，定时检查任务仍按原设置运行。");
+        try { window.close(); } catch {}
+      }
       return;
     }
     if (action === "restart" && health?.app === "autumn-local-only" && health.instance && health.instance !== instance) {

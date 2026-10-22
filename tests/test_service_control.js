@@ -39,5 +39,20 @@ ${source.slice(source.indexOf('async function api('),source.indexOf('async funct
   const rejected=vm.runInContext('api("/api/settings",{})',apiContext);
   release({ok:false,json:async()=>({error:'failed'})});await assert.rejects(rejected);
   assert.equal(vm.runInContext('pendingWrites',apiContext),0);
+  for (const unsaved of [false,true]) {
+    let closed=0;
+    const exitMessages=[];
+    const exitContext=vm.createContext({
+      document:{querySelector:()=>unsaved,body:{classList:{add(){}}}},
+      $:()=>({}),tell:message=>exitMessages.push(message),
+      fetch:async()=>{throw Error('service stopped');},
+      AbortSignal,Date,window:{close:()=>{closed++;}},
+    });
+    vm.runInContext(`let serviceChanging=false,stream=null,dirtyNotes=false;
+${source.slice(source.indexOf('function hasUnsavedChanges('),source.indexOf('async function controlService('))}`,exitContext);
+    await vm.runInContext('serviceTransition("exit","old")',exitContext);
+    assert.equal(closed,unsaved?0:1);
+    assert.match(exitMessages.at(-1),unsaved?/未保存/:/未自动关闭/);
+  }
   console.log('服务控制检查通过：扫描、保存、未保存改动保护及请求计数恢复');
 })().catch(error=>{console.error(error);process.exitCode=1;});
