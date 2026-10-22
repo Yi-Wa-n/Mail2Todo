@@ -33,6 +33,35 @@ class LocalTasks(unittest.TestCase):
 
     def edit(self,kind,item,**value):repo.mutate(self.db,kind,{'id':item['id'],'version':item['version'],**value})
 
+    def test_reschedule_history_retains_notifications_with_only_latest_steps(self):
+        previous = self.key
+        ids = [previous]
+        for n, hour in enumerate([15, 16]):
+            message = EmailMessage()
+            message['Subject'] = '测试公司时间变更'
+            message['From'] = 'test@example.invalid'
+            message['Message-ID'] = f'<change-{n}@example.invalid>'
+            message.set_content('时间变更，请按最新时间参加')
+            core.store_message(self.db, message.as_bytes(), 'INBOX', '1', str(n + 2),
+                               received=dt.datetime(2026, 10, 22, 12 + n, tzinfo=core.TZ))
+            key = self.db.execute('SELECT id FROM mails WHERE id NOT IN (' + ','.join('?' for _ in ids) + ')', ids).fetchone()[0]
+            core.ingest(self.db, [{**self.item, 'id':key, 'supersedes':previous,
+                                  'event_at':f'2026-10-24T{hour}:00:00+08:00'}])
+            repo.sync_local(self.db)
+            ids.append(key)
+            previous = key
+        state = self.state()
+        by_id = {mail['id']:mail for mail in state['emails']}
+        self.assertEqual(ids[1], by_id[ids[2]]['supersedes'])
+        self.assertEqual(ids[0], by_id[ids[1]]['supersedes'])
+        self.assertEqual(self.item['event_at'], by_id[ids[0]]['start'])
+        self.assertEqual('原备注', by_id[ids[0]]['notes'])
+        self.assertEqual([ids[2]], [mail['id'] for mail in state['emails'] if mail['active']])
+        active = [step for step in state['steps'] if step['active']]
+        self.assertEqual(2, len(active))
+        self.assertEqual({ids[2]}, {step['mail_id'] for step in active})
+        self.assertEqual(3, self.db.execute('SELECT count(*) FROM records').fetchone()[0])
+
     def test_confirmation_and_attendance_are_independent(self):
         state=self.state();self.assertEqual(2,len(state['steps']))
         confirmation=next(x for x in state['steps'] if x['label']=='预约/确认参加')

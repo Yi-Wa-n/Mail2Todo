@@ -783,5 +783,14 @@ body.modal-open {
   pointer-events: none;
 }
 
+.schedule-change { padding: 12px; margin: 12px 0; background: #fff8e8; border: 1px solid #efddb2; border-radius: 7px; font-size: 13px; line-height: 1.8; }
+.change-history { margin: 14px 0; font-size: 13px; line-height: 1.8; }
+.change-history summary { cursor: pointer; color: var(--blue); }
+.history-entry { border-left: 2px solid #d9e1ed; margin: 12px 0 12px 4px; padding-left: 12px; }
+.event-change { display: block; font-size: 11px; color: #936619; }
+
+.covered-label { display: inline-block; margin-top: 6px; padding: 2px 6px; border-radius: 4px; font-size: 11px; line-height: 1.6; color: #7b6846; background: #f7f0e3; white-space: nowrap; }
+.toolbar-group select { padding: 6px; border: 1px solid #d9e1ed; border-radius: 5px; background: white; }
+
 .delete-confirmation { padding: 12px; margin-top: 12px; border: 1px solid #edc9c5; border-radius: 7px; background: #fff8f7; line-height: 1.7; }
 .delete-confirmation button { margin: 10px 8px 0 0; }

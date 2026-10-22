@@ -128,7 +128,8 @@ def state(db):
                        'action':v['待办事项'],'start':timestamp(v.get('开始时间')),'deadline':timestamp(v.get('截止时间')),
                        'received':row['received'],'subject':row['subject'],'notes':row['notes'],
                        'done':all(s['done'] for s in related) if related else bool(item.get('manual_completed')),
-                       'active':item['id'] not in inactive,'version':row['version']})
+                       'active':item['id'] not in inactive,'version':row['version'],
+                       'supersedes':item.get('supersedes')})
     emails.sort(key=lambda v:v['received'],reverse=True)
     steps.sort(key=lambda v:v['received'],reverse=True)
     manual=[{**json.loads(r['payload']),'id':r['id'],'version':r['version']} for r in db.execute('SELECT * FROM manual_events WHERE deleted=0')]

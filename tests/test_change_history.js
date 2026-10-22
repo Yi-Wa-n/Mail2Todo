@@ -1,0 +1,25 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs'), vm = require('node:vm');
+const source = fs.readFileSync(require('node:path').join(__dirname, '../app/web/app.js'), 'utf8');
+const context = vm.createContext({fmt: value => value, Map, Set});
+vm.runInContext(source.slice(source.indexOf('function changeHistory('), source.indexOf('function renderChangeHistory(')), context);
+const old = {id:'a', start:'2026-10-24T14:00', deadline:null};
+const middle = {id:'b', supersedes:'a', start:'2026-10-24T15:00', deadline:null};
+const latest = {id:'c', supersedes:'b', start:'2026-10-24T16:00', deadline:null};
+assert.equal(context.changeHistory(latest, [old,middle,latest]).length, 2);
+assert.equal(context.changeHistory(latest, [old,middle,latest])[0].previous.id, 'b');
+assert.match(context.timeChanges(old,middle)[0], /14:00.*→.*15:00/);
+assert.equal(context.timeChanges(old,{...old}).length, 0);
+assert.equal(context.changeHistory(old,[old]).length, 0);
+assert.equal(context.changeHistory(latest,[latest]).length, 0);
+assert.equal(context.changeHistory(latest,[{...old,supersedes:'c'},middle,latest]).length, 2);
+console.log('变更历史检查通过：多次变更、前后时间、缺失记录与循环保护');
+
+const filter = vm.runInNewContext(source.slice(source.indexOf('function filterEmailRecords('), source.indexOf('function renderEmails(')) + '; filterEmailRecords');
+const records = [{id:'active',active:true,done:false}, {id:'done',active:true,done:true}, {id:'covered',active:false,done:true}];
+assert.equal(filter(records,'all',false,()=>true).length,2);
+assert.equal(filter(records,'covered',false,()=>true)[0].id,'covered');
+assert.equal(filter(records,'active',false,()=>true)[0].id,'active');
+assert.equal(filter(records,'all',true,()=>true).length,3);
+assert.equal(filter(records,'covered',false,()=>false).length,0);
+console.log('邮件筛选检查通过：历史记录不受完成筛选隐藏，状态与搜索组合生效');

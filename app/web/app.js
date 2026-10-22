@@ -37,6 +37,7 @@ try {
   const saved = Number(localStorage.getItem("autumn-local-email-page-size"));
   if (emailPageSizes.includes(saved)) emailPageSize = saved;
 } catch {}
+let emailRecordFilter = "active";
 let emailPage = 1,
   agendaAnchor = null,
   agendaJump = false;
@@ -430,7 +431,16 @@ function calendarDay(date, eventsByDay, continuous) {
       ),
       el("span", fmt(step.at).slice(11), "time"),
     );
-    title.title = step.role + " · " + step.action;
+    if (step.source !== "manual") {
+      const mail = data.emails.find((item) => item.id === step.mail_id);
+      const previous = mail && changeHistory(mail)[0]?.previous;
+      if (previous) {
+        const changes = timeChanges(previous, mail);
+        if (changes.length) title.append(el("span", "时间已变更", "event-change"));
+        title.title = changes.join("；");
+      }
+    }
+    title.title = (title.title ? title.title + " · " : "") + step.role + " · " + step.action;
     card.append(
       checkbox(
         step.done,
@@ -674,11 +684,22 @@ function emailPageRows(emails, requestedPage, size) {
     end: Math.min(start + size, sorted.length),
   };
 }
+function filterEmailRecords(emails, mode, includeDone, match) {
+  return emails.filter((mail) =>
+    (mode === "all" || (mode === "active" ? mail.active : !mail.active)) &&
+    (!mail.active || includeDone || !mail.done) && match(mail));
+}
 function renderEmails(main) {
-  const emails = data.emails.filter(
-    (m) => m.active && (showDone || !m.done) && matches(m),
-  );
-  main.append(controls(emails.length + " 封邮件 · 按接收时间倒序"));
+  const emails = filterEmailRecords(data.emails, emailRecordFilter, showDone, matches);
+  const bar = controls(emails.length + " 封邮件 · 按接收时间倒序");
+  const label = el("label", "记录状态 ", "toolbar-group"), filter = el("select");
+  filter.setAttribute("aria-label", "邮件记录状态");
+  for (const [value, text] of [["all", "全部记录"], ["active", "当前有效"], ["covered", "已被覆盖"]]) {
+    const option = el("option", text); option.value = value; filter.append(option);
+  }
+  filter.value = emailRecordFilter;
+  filter.onchange = () => { emailRecordFilter = filter.value; emailPage = 1; renderContent(); };
+  label.append(filter); bar.lastChild.append(label); main.append(bar);
   const result = emailPageRows(emails, emailPage, emailPageSize);
   emailPage = result.current;
   const { panel, tbody } = table([
@@ -696,19 +717,22 @@ function renderEmails(main) {
     const row = el("tr");
     row.dataset.mailId = m.id;
     row.dataset.received = m.received;
+    const company = el("div");
+    company.append(button(m.company, () => openMail(m.id), "link"));
+    if (!m.active) company.append(el("div", "已被后续通知覆盖", "covered-label"));
     row.append(
-      td(button(m.company, () => openMail(m.id), "link")),
+      td(company),
       td(m.role),
       td(tag(m.category)),
       td(m.action, "wrap"),
       td(fmt(m.start)),
       td(fmt(m.deadline)),
       td(
-        checkbox(
+        m.active ? checkbox(
           m.done,
           (v, c) => change("email", m, v, c),
           "完成该邮件全部步骤",
-        ),
+        ) : el("span", "—"),
       ),
       td(
         button(m.notes || "添加备注", () => openMail(m.id), "link"),
@@ -1020,6 +1044,56 @@ function openManual(event = null) {
   if (!$("#detail").open) $("#detail").showModal();
   document.body.classList.add("modal-open");
 }
+function changeHistory(mail, emails = data.emails) {
+  const byId = new Map(emails.map((item) => [item.id, item]));
+  const seen = new Set([mail.id]), history = [];
+  let current = mail;
+  while (current.supersedes && byId.has(current.supersedes) && !seen.has(current.supersedes)) {
+    const previous = byId.get(current.supersedes);
+    seen.add(previous.id);
+    history.push({ previous, current });
+    current = previous;
+  }
+  return history;
+}
+function timeChanges(previous, current) {
+  return [["start", "开始时间"], ["deadline", "截止时间"]]
+    .filter(([key]) => previous[key] !== current[key])
+    .map(([key, label]) => label + "：" + (previous[key] ? fmt(previous[key]) : "未确定")
+      + " → " + (current[key] ? fmt(current[key]) : "未确定"));
+}
+function renderChangeHistory(body, mail) {
+  const history = changeHistory(mail);
+  if (!history.length) return;
+  const changes = timeChanges(history[0].previous, mail);
+  if (changes.length) {
+    const notice = el("div", null, "schedule-change");
+    notice.append(el("strong", "时间已变更（北京时间）"));
+    changes.forEach((line) => notice.append(el("div", line)));
+    body.append(notice);
+  }
+  const details = el("details", null, "change-history");
+  details.append(el("summary", "变更历史（" + history.length + " 次）"));
+  for (const { previous, current } of history) {
+    const entry = el("div", null, "history-entry");
+    entry.append(el("strong", "更新于 " + fmt(current.received)),
+      el("div", previous.subject, "small"));
+    const lines = timeChanges(previous, current);
+    (lines.length ? lines : ["后续通知已更新安排"]).forEach((line) => entry.append(el("div", line)));
+    entry.append(el("div", "原通知收到于 " + fmt(previous.received), "small"),
+      el("div", previous.action, "small"));
+    if (previous.notes) entry.append(el("div", "原备注：" + previous.notes, "small"));
+    entry.append(button("查看原通知", async () => {
+      try {
+        const value = await api("/api/mail/" + previous.id);
+        entry.querySelector("pre")?.remove();
+        entry.append(el("pre", value.body));
+      } catch (error) { tell(error.message, true); }
+    }, "link"));
+    details.append(entry);
+  }
+  body.append(details);
+}
 function openMail(id) {
   selected = id;
   dirtyNotes = false;
@@ -1040,13 +1114,25 @@ function renderDetail() {
     el("div", m.subject, "small"),
     el("div", "接收于 " + fmt(m.received), "small"),
   );
-  body.append(meta, el("div", m.action, "detail-action"));
+  body.append(meta);
+  if (!m.active) {
+    const notice = el("div", null, "schedule-change");
+    notice.append(el("strong", "已被后续通知覆盖"),
+      el("div", "此为历史记录，不再列入日历和待办提醒。"));
+    const latest = data.emails.find((item) => item.active && changeHistory(item).some(({ previous }) => previous.id === m.id));
+    if (latest) notice.append(button("查看最新安排", () => {
+      selected = latest.id; dirtyNotes = false; body.scrollTop = 0; renderDetail();
+    }, "link"));
+    body.append(notice);
+  }
+  renderChangeHistory(body, m);
+  body.append(el("div", m.action, "detail-action"));
   const all = el("label", null, "toolbar-group");
   all.append(
     checkbox(m.done, (v, c) => change("email", m, v, c), "完成全部步骤"),
     el("span", "完成全部步骤"),
   );
-  body.append(all);
+  if (m.active) body.append(all);
   for (const s of data.steps.filter((x) => x.mail_id === m.id && x.active)) {
     const row = el("label", null, "step-row"),
       content = el("div");
