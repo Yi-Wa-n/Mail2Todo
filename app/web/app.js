@@ -206,16 +206,38 @@ function controls(count, search = true) {
   const right = el("div", null, "toolbar-group");
   if (search) {
     const input = el("input", null, "search");
-    input.placeholder = "搜索公司、岗位、待办";
+    input.placeholder = "搜索公司、岗位、类型、待办、备注";
     input.value = query;
-    input.oninput = () => {
+    let composing = false;
+    let searchTimer;
+    const searchInput = (event, force = false) => {
+      if (input.isConnected === false) return;
+      if (composing || event?.isComposing || (!force && input.value === query)) return;
       const caret = input.selectionStart;
       query = input.value;
       emailPage = 1;
-      renderContent();
+      renderContent(true);
       const replacement = $(".search");
       replacement?.focus();
       replacement?.setSelectionRange(caret, caret);
+    };
+    input.oncompositionstart = () => { composing = true; clearTimeout(searchTimer); };
+    input.oncompositionend = () => {
+      composing = false;
+      // Let the browser finish committing the IME text before reading the value.
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => searchInput(), 0);
+    };
+    input.oninput = (event) => {
+      if (composing || event.isComposing) return;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => searchInput(), 120);
+    };
+    input.onkeydown = (event) => {
+      if (event.key !== "Enter" || composing || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      clearTimeout(searchTimer);
+      searchInput(event, true);
     };
     right.append(input);
   }
@@ -239,12 +261,13 @@ function controls(count, search = true) {
   return bar;
 }
 function matches(item) {
+  const keyword = query.trim().toLowerCase();
   return (
-    !query ||
-    [item.company, item.role, item.action, item.label].some((v) =>
+    !keyword ||
+    [item.company, item.role, item.category, item.action, item.label, item.notes].some((v) =>
       String(v || "")
         .toLowerCase()
-        .includes(query.toLowerCase()),
+        .includes(keyword),
     )
   );
 }
@@ -305,13 +328,27 @@ function scheduleSummary(schedule) {
     fmt(schedule.next_run)
   );
 }
-function renderContent() {
+function renderContent(preserveSearch = false) {
   const main = $("#main");
   if (page === "settings" && main.querySelector('.settings[data-dirty="true"]'))
     return;
   captureCalendarPosition();
   captureAgendaPosition();
   const revision = ++contentRevision;
+  if (preserveSearch && ["steps", "emails"].includes(page)) {
+    const toolbar = main.querySelector(".toolbar");
+    if (toolbar) {
+      const content = el("div");
+      if (page === "steps") renderSteps(content);
+      else renderEmails(content);
+      const nextToolbar = content.querySelector(".toolbar");
+      toolbar.querySelector(".count").textContent = nextToolbar.querySelector(".count").textContent;
+      nextToolbar.remove();
+      for (const child of [...main.children]) if (child !== toolbar) child.remove();
+      main.append(...content.children);
+      return;
+    }
+  }
   main.replaceChildren();
   main.classList.toggle("settings-page", page === "settings");
   if (page === "calendar") renderCalendar(main);
