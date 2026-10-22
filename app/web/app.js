@@ -1426,6 +1426,23 @@ function showText(title, text) {
   if (!$("#detail").open) $("#detail").showModal();
   document.body.classList.add("modal-open");
 }
+function auditStatus(value, kind) {
+  const labels = {
+    model: {prepared: "等待模型判断", returned: "已返回，待校验", validated: "输出校验通过", validation_failed: "输出校验未通过", failed: "模型调用失败"},
+    storage: {not_started: "尚未保存", pending: "等待保存", verified: "已保存并核验", failed: "保存或核验失败", ingested: "已写入记录", not_recorded: "未找到保存记录", no_action: "无需生成待办"},
+  };
+  return value ? labels[kind]?.[value] || "状态待确认" : "未记录";
+}
+function auditFileLabel(name) {
+  return {
+    "manifest.json": "处理记录（原始数据）",
+    "input.json": "发送给模型的内容（原始数据）",
+    "output.txt": "模型最终输出（原始数据）",
+    "initial-output.txt": "修正前的输出（原始数据）",
+    "correction-input.json": "格式修正请求（原始数据）",
+    "correction-output.txt": "格式修正结果（原始数据）",
+  }[name] || "其他原始记录";
+}
 async function renderAudits(main) {
   const revision = contentRevision;
   main.append(el("div", "正在读取…", "empty"));
@@ -1434,12 +1451,13 @@ async function renderAudits(main) {
     if (page !== "audits" || revision !== contentRevision) return;
     main.replaceChildren(
       controls(items.length + " 条模型判断 · 包含导入的历史记录", false),
+      el("p", "输出校验通过：模型返回的内容符合格式和字段要求，不代表判断一定正确。已保存并核验：处理结果已保存，且通过保存检查。", "small"),
     );
     const { panel, tbody } = table([
       "时间",
       "实际模型",
-      "判断",
-      "持久化结果",
+      "输出检查",
+      "保存结果",
       "详情",
     ]);
     for (const a of items) {
@@ -1447,8 +1465,8 @@ async function renderAudits(main) {
       row.append(
         td(fmt(a.started_at)),
         td(a.actual_model || "未记录"),
-        td(a.model_status || "—"),
-        td(a.sync_status || "—"),
+        td(auditStatus(a.model_status, "model")),
+        td(auditStatus(a.sync_status, "storage")),
         td(
           button(
             "查看输入 / 输出",
@@ -1462,7 +1480,7 @@ async function renderAudits(main) {
                     .filter(([, value]) => value)
                     .map(([name, value]) => {
                       const box = el("details");
-                      box.append(el("summary", name), el("pre", value));
+                      box.append(el("summary", auditFileLabel(name)), el("pre", value));
                       return box;
                     }),
                 );
