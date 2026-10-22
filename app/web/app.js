@@ -283,6 +283,7 @@ function render() {
   $("#main").setAttribute("aria-busy", "false");
 }
 function scheduleSummary(schedule) {
+  if (schedule?.pending) return "定时状态读取中…";
   if (!schedule || schedule.error)
     return schedule?.error || "定时详情将在页面服务重启后显示";
   if (!schedule.enabled) return "自动检查未启用";

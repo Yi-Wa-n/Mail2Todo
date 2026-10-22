@@ -37,9 +37,15 @@ class Service:
             value['job']=dict(self.job)
             value['account']=account_id()
             value['version']=value['account']+':'+str(value['revision'])+':'+str(self.job_version)
-        from backend.jobs.scheduler import status
-        value['schedule']=status()
+        from backend.jobs.scheduler import status_nowait
+        value['schedule']=status_nowait(self._schedule_refreshed)
         return value
+
+    def _schedule_refreshed(self):
+        with self.guard:
+            self.job_version+=1
+        with self.changed:
+            self.changed.notify_all()
 
     def revision(self):return self.use(repo.revision)
 

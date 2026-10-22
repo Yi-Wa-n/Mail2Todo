@@ -6,6 +6,7 @@ import threading
 import time
 
 _guard=threading.Lock()
+_refresh_guard=threading.Lock()
 _cached=None
 _checked=0
 SCRIPT=Path(__file__).resolve().parents[2]/'tools/scheduled_task.ps1'
@@ -24,6 +25,25 @@ def status():
             _cached={'installed':None,'enabled':None,'error':'无法读取计划任务状态'}
         _checked=time.monotonic()
         return dict(_cached)
+
+
+def status_nowait(on_refresh=None):
+    """Return a snapshot immediately; query Windows once in a background thread."""
+    snapshot = dict(_cached) if _cached is not None else {
+        'installed':None, 'enabled':None, 'pending':True}
+    if _cached is not None and time.monotonic()-_checked < 20:
+        return snapshot
+    snapshot['refreshing'] = True
+    if _refresh_guard.acquire(blocking=False):
+        def refresh():
+            try:
+                status()
+                if on_refresh is not None:
+                    on_refresh()
+            finally:
+                _refresh_guard.release()
+        threading.Thread(target=refresh, daemon=True).start()
+    return snapshot
 
 
 def update(value):

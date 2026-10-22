@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import unittest
 from unittest.mock import patch
 from backend.jobs import scheduler,scheduled_gate
@@ -37,6 +39,34 @@ class SchedulerTests(unittest.TestCase):
     def test_unavailable_status_never_reports_disabled_as_a_fact(self):
         with patch.object(scheduler,'_cached',None),patch.object(scheduler.subprocess,'run',side_effect=OSError):
             value=scheduler.status();self.assertIsNone(value['enabled']);self.assertIn('error',value)
+
+    def test_background_status_never_blocks_and_coalesces_slow_queries(self):
+        for cached in [None, {'installed':True, 'enabled':True}]:
+            entered, release, notified = threading.Event(), threading.Event(), threading.Event()
+            def slow_query(*args, **kwargs):
+                entered.set()
+                release.wait(3)
+                return subprocess.CompletedProcess([], 0, json.dumps({'installed':True, 'enabled':True}), '')
+            with patch.object(scheduler, '_cached', cached), patch.object(scheduler, '_checked', 0), patch.object(scheduler.subprocess, 'run', side_effect=slow_query) as run:
+                try:
+                    with ThreadPoolExecutor() as pool:
+                        first = pool.submit(scheduler.status_nowait, notified.set).result(timeout=1)
+                        self.assertTrue(first['refreshing'])
+                        self.assertTrue(entered.wait(1))
+                        for _ in range(4):
+                            self.assertTrue(pool.submit(scheduler.status_nowait).result(timeout=1)['refreshing'])
+                        self.assertEqual(1, run.call_count)
+                        if cached is None:
+                            self.assertTrue(first['pending']); self.assertIsNone(first['enabled'])
+                        else:
+                            self.assertTrue(first['enabled'])
+                finally:
+                    release.set()
+                    self.assertTrue(notified.wait(2))
+                    self.assertTrue(scheduler._refresh_guard.acquire(timeout=2))
+                    scheduler._refresh_guard.release()
+                self.assertTrue(scheduler.status_nowait()['enabled'])
+                self.assertEqual(1, run.call_count)
 
     def test_task_uses_same_scan_and_returns_success(self):
         with tempfile.TemporaryDirectory() as folder,patch.object(scheduled_gate,'HOME',Path(folder)),patch('backend.jobs.manual_scan.main') as scan:
