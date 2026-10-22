@@ -2,6 +2,8 @@
 import datetime as dt
 import json
 import sqlite3
+from contextlib import nullcontext
+from backend.storage import mail_schedule
 
 from backend.mail.core import records,action_items,inactive_ids,get_meta,set_meta,canonical,digest,now
 from backend.mail.steps import project
@@ -69,16 +71,21 @@ def initialize(db):
         set_meta(db,'local_gate_last_result',{})
         set_meta(db,'local_scan_namespace',1)
 
+    if not get_meta(db,'mail_schedule_edit_schema'):
+        sync_local(db)
+        set_meta(db,'mail_schedule_edit_schema',1)
 
-def sync_local(db,initial=False):
-    items=records(db)
-    byid={i['id']:i for i in items}
-    desired=project(items,values)
-    snapshots=get_meta(db,'schedule_snapshots',{}) if initial else {}
-    completion=get_meta(db,'step_completion_states',{}) if initial else {}
-    remote_to_mail={v:k for k,v in get_meta(db,'detail_record_map',{}).items()} if initial else {}
-    existing={r['id']:r for r in db.execute('SELECT * FROM local_steps')}
-    with db:
+
+def sync_local(db,initial=False,commit=True):
+    with (db if commit else nullcontext()):
+        items=records(db)
+        byid={i['id']:i for i in items}
+        snapshots=get_meta(db,'schedule_snapshots',{}) if initial else {}
+        completion=get_meta(db,'step_completion_states',{}) if initial else {}
+        remote_to_mail={v:k for k,v in get_meta(db,'detail_record_map',{}).items()} if initial else {}
+        existing={r['id']:r for r in db.execute('SELECT * FROM local_steps')}
+        mail_schedule.prepare(db,items)
+        desired=project(items,values)
         for item in items:
             db.execute('INSERT OR REPLACE INTO mail_index VALUES (?,?,?)',(item['id'],item['subject'],item['received']))
             db.execute('INSERT OR IGNORE INTO local_overrides(mail_id,notes) VALUES (?,?)',(item['id'],item.get('notes','')))
@@ -94,8 +101,8 @@ def sync_local(db,initial=False):
                      'estimated':'估算' in v.get('时间依据',''),'basis':v.get('时间依据',''),
                      'received':item['received']}
             done=bool(old['done']) if old else bool(completion.get(key,v.get('已完成',False)))
-            db.execute('INSERT INTO local_steps(id,mail_id,payload,done,version) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET mail_id=excluded.mail_id,payload=excluded.payload',
-                       (key,mail_id,canonical(payload),int(done),old['version'] if old else 0))
+            db.execute('INSERT INTO local_steps(id,mail_id,payload,done,version) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET mail_id=excluded.mail_id,payload=excluded.payload,version=excluded.version',
+                       (key,mail_id,canonical(payload),int(done),old['version']+int(json.loads(old['payload'])!=payload) if old else 0))
         for key,row in existing.items():
             if key not in desired and key not in snapshots:
                 value=json.loads(row['payload']);value['active']=False
@@ -104,8 +111,8 @@ def sync_local(db,initial=False):
         # external document write. New audit sync checks use this hash.
         for row in db.execute('SELECT mail_id,payload FROM records').fetchall():
             db.execute('UPDATE records SET synced_hash=? WHERE mail_id=?',(digest(row['payload']),row['mail_id']))
-    bump(db)
-    return {'local_records_verified':len(items),'steps_verified':db.execute('SELECT count(*) FROM local_steps').fetchone()[0]}
+        db.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", ("local_revision",canonical(revision(db)+1)))
+        return {'local_records_verified':len(items),'steps_verified':db.execute('SELECT count(*) FROM local_steps').fetchone()[0]}
 
 
 def state(db):
@@ -129,12 +136,21 @@ def state(db):
                        'received':row['received'],'subject':row['subject'],'notes':row['notes'],
                        'done':all(s['done'] for s in related) if related else bool(item.get('manual_completed')),
                        'active':item['id'] not in inactive,'version':row['version'],
-                       'supersedes':item.get('supersedes')})
+                       'supersedes':item.get('supersedes'),
+                       'original':item.get('manual_schedule_original',mail_schedule.extracted(item)),
+                       'notification':mail_schedule.extracted(item),
+                       'manual_fields':[key for key,label in mail_schedule.FIELDS.items() if label in item.get('manual_values',{})],
+                       'edit_history':item.get('manual_schedule_history',[]),
+                       'pending_manual_review':mail_schedule.pending(item)})
     emails.sort(key=lambda v:v['received'],reverse=True)
     steps.sort(key=lambda v:v['received'],reverse=True)
     manual=[{**json.loads(r['payload']),'id':r['id'],'version':r['version']} for r in db.execute('SELECT * FROM manual_events WHERE deleted=0')]
     return {'revision':revision(db),'emails':emails,'steps':steps,'manual_events':manual,'imported_at':get_meta(db,'local_imported_at'),
             'last_scan':get_meta(db,'local_gate_last_success'),'result':get_meta(db,'local_gate_last_result',{})}
+
+
+def edit_mail_schedule(db,value):
+    return mail_schedule.edit(db,value,sync_local)
 
 
 def mutate(db,kind,value):

@@ -56,6 +56,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(409,self.request('/api/email','POST',{'stale':True},headers)[0])
         self.assertEqual(200,self.request('/api/manual','POST',{'op':'create'},headers)[0])
         self.assertEqual(200,self.request('/api/schedule','POST',{'interval_hours':1},headers)[0])
+        self.assertEqual(200,self.request('/api/mail-schedule','POST',{'op':'save'},headers)[0])
+        self.assertEqual(403,self.request('/api/mail-schedule','POST',{'op':'save'})[0])
 
     def headers(self):
         return {'Origin':f'http://127.0.0.1:{self.port}','X-Local-Token':'test-token'}

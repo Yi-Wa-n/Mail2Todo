@@ -86,6 +86,8 @@ class AccountTests(unittest.TestCase):
         self.switch()
         with self.assertRaisesRegex(ValueError,'邮箱已切换'):
             service.edit('email',{'account':'legacy'})
+        with self.assertRaisesRegex(ValueError,'邮箱已切换'):
+            service.edit('mail-schedule',{'account':'legacy'})
         service.job['running']=True
         with self.assertRaises(ValueError):service.mailbox({'op':'credentials','code':'test','account':vault.account_id()})
 

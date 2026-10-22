@@ -16,7 +16,7 @@ def project(items, detail_values):
         v = detail_values(item)
         category = v['通知类型']
         # Only explicit action evidence creates a confirmation step. Notes are never parsed.
-        evidence = (item.get('next_action') or '') + '\n' + (item.get('evidence') or '')
+        evidence = (v.get('待办事项') or '') + '\n' + (item.get('evidence') or '')
         confirm = bool(re.search(r'确认.{0,5}(?:是否.{0,3})?参加|回复.{0,12}参加', evidence) or (re.search(r'预约|准考证', evidence) and not re.search(r'(?:无需|不需|不用|免预约).{0,10}(?:预约|准考证)', evidence)))
         attendance = category in ('笔试','面试','AI面试') or bool(v.get('开始时间'))
         activity = category if category in ('笔试','面试','AI面试','测评') else '安排'
@@ -37,14 +37,14 @@ def project(items, detail_values):
         legacy_done = bool(item.get('manual_completed', v.get('已完成', False)))
         split = len(stages) > 1
         for source, label, stamp in stages:
-            estimated = source == '截止时间' and (item.get('deadline_estimated', False) or '估算' in v['待办事项'])
+            estimated = source == '截止时间' and '截止时间' not in item.get('manual_values', {}) and (item.get('deadline_estimated', False) or '估算' in v['待办事项'])
             action = v['待办事项']
             if label == '预约/确认参加':
                 action = '按原邮件要求预约或确认是否参加；完成本步骤不代表已参加考试/面试。'
-            elif label.startswith('参加'):
+            elif label.startswith('参加') and '待办事项' not in item.get('manual_values', {}):
                 event_name = category if category in ('笔试','面试','AI面试','测评') else '该安排'
                 action = '按邮件安排实际参加' + event_name + '；结束后再勾选本步骤。'
-            basis = '按收件时间估算，以系统为准' if estimated else ('原邮件及原台账时间（北京时间）' if stamp else '时间待核实；可选场次不作为确定安排')
+            basis = '手动修订（北京时间）' if (('开始时间' if source == '开始时间' else '截止时间') in item.get('manual_values', {}) and stamp) else '按收件时间估算，以系统为准' if estimated else ('原邮件及原台账时间（北京时间）' if stamp else '时间待核实；可选场次不作为确定安排')
             if split and legacy_done:
                 basis += '；原邮件已有完成标记，未区分步骤，请分别核实'
             result[root_id(item) + ':' + source] = {

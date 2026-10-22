@@ -108,7 +108,7 @@ def handler(service,token,life):
                     finally:stop_server(self.server,service,life)
                     return
                 with life.mutation():
-                    if self.path in ('/api/step','/api/email','/api/notes'):return self.reply(service.edit(self.path[5:],value))
+                    if self.path in ('/api/step','/api/email','/api/notes','/api/mail-schedule'):return self.reply(service.edit(self.path[5:],value))
                     if self.path=='/api/manual':return self.reply(service.manual(value))
                     if self.path=='/api/scan':return self.reply({'started':service.scan()})
                     if self.path=='/api/settings':return self.reply(service.save_settings(value))

@@ -815,3 +815,9 @@ body.service-changing .workspace, body.service-changing #nav { pointer-events: n
 @media (max-width: 680px) {
   .service-actions { display: flex; justify-content: flex-end; padding-top: 8px; }
 }
+
+.schedule-values { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 12px; table-layout: fixed; }
+.schedule-values td, .schedule-values th { padding: 8px 5px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; overflow-wrap: anywhere; white-space: pre-wrap; }
+.schedule-values th:first-child { width: 18%; }
+.mail-schedule-form select { width: 100%; padding: 10px; border: 1px solid #d9e1ed; border-radius: 7px; background: #fcfdff; }
+.source-confirmation button { margin: 10px 8px 0 0; }

@@ -69,7 +69,7 @@ class Service:
     def edit(self,kind,value):
         with self.guard,locked():
             self.check_account(value)
-            self.use(lambda db:repo.mutate(db,kind,value))
+            self.use(lambda db:repo.edit_mail_schedule(db,value) if kind=='mail-schedule' else repo.mutate(db,kind,value))
             result=self.state()
         with self.changed:self.changed.notify_all()
         return result

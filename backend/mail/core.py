@@ -290,7 +290,7 @@ def ingest(db, decisions, audit_id=None):
                 item = dict(decision)
                 row = db.execute('SELECT payload,synced_hash FROM records WHERE mail_id=?', (key,)).fetchone()
                 previous = json.loads(row['payload']) if row else {}
-                for field in ('manual_status', 'notes', 'manual_company', 'manual_role', 'manual_direct', 'manual_columns', 'manual_values', 'manual_completed', 'completion_previous_status', 'remote_record_id'):
+                for field in ('manual_status', 'notes', 'manual_company', 'manual_role', 'manual_direct', 'manual_columns', 'manual_values', 'manual_completed', 'completion_previous_status', 'remote_record_id', 'manual_schedule_original', 'manual_schedule_source', 'manual_schedule_history', 'manual_schedule_checked_source'):
                     if field in previous:
                         item[field] = previous[field]
                 db.execute('INSERT OR REPLACE INTO records VALUES (?,?,?)', (key, canonical(item), row['synced_hash'] if row else None))

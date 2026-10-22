@@ -99,7 +99,7 @@ function tell(text, error = false) {
   $("#message").className = error ? "error" : "";
 }
 async function api(path, value) {
-  if (value !== undefined && ["/api/step", "/api/email", "/api/notes", "/api/manual", "/api/mailbox"].includes(path)) {
+  if (value !== undefined && ["/api/step", "/api/email", "/api/notes", "/api/manual", "/api/mailbox", "/api/mail-schedule"].includes(path)) {
     value = { ...value, account: data?.account };
   }
   const writing = value !== undefined && path !== "/api/control";
@@ -444,6 +444,7 @@ function calendarDay(date, eventsByDay, continuous) {
     title.append(description, el("span", fmt(step.at).slice(11), "time"));
     if (step.source !== "manual") {
       const mail = data.emails.find((item) => item.id === step.mail_id);
+      if (mail?.manual_fields?.length) description.append(el("span", mail.pending_manual_review?.length ? "新通知待核对" : "已手动修订", "event-change"));
       const previous = mail && changeHistory(mail)[0]?.previous;
       if (previous) {
         const changes = timeChanges(previous, mail);
@@ -731,6 +732,7 @@ function renderEmails(main) {
     const company = el("div");
     company.append(button(m.company, () => openMail(m.id), "link"));
     if (!m.active) company.append(el("div", "已被后续通知覆盖", "covered-label"));
+    if (m.active && m.manual_fields?.length) company.append(el("div", m.pending_manual_review?.length ? "新通知待核对" : "已手动修订", "covered-label"));
     row.append(
       td(company),
       td(m.role),
@@ -1112,6 +1114,100 @@ function openMail(id) {
   $("#detail").showModal();
   document.body.classList.add("modal-open");
 }
+const scheduleFieldLabels = { category: "通知类型", start: "开始时间", deadline: "截止时间", action: "待办事项" };
+function scheduleFieldText(key, value) {
+  return key === "start" || key === "deadline" ? (value ? fmt(value) : "未确定") : value || "—";
+}
+function scheduleComparison(mail) {
+  const table = el("table", null, "schedule-values");
+  const header = el("tr");
+  ["字段", "原始提取", "最新通知", "当前使用"].forEach((text) => header.append(el("th", text)));
+  table.append(header);
+  for (const [key, label] of Object.entries(scheduleFieldLabels)) {
+    const row = el("tr");
+    [label, scheduleFieldText(key, mail.original?.[key]), scheduleFieldText(key, mail.notification?.[key]), scheduleFieldText(key, mail[key])]
+      .forEach((text) => row.append(el("td", text)));
+    table.append(row);
+  }
+  return table;
+}
+function renderScheduleCorrections(body, mail) {
+  if (mail.pending_manual_review?.length) {
+    const notice = el("div", null, "schedule-change");
+    notice.append(el("strong", "新通知与手动修订不同，待核对"),
+      el("div", "日历继续使用你的修订值。涉及：" + mail.pending_manual_review.map((key) => scheduleFieldLabels[key]).join("、")));
+    body.append(notice);
+  } else if (mail.manual_fields?.length) body.append(el("div", "已手动修订，后续通知不会自动替换这些字段。", "small"));
+  const details = el("details", null, "change-history");
+  details.append(el("summary", "原始值与修改历史（" + (mail.edit_history?.length || 0) + " 条）"), scheduleComparison(mail));
+  const labels = { imported: "导入已有修订", save: "手动修订", "use-notification": "采用最新通知", inherited: "沿用前一通知的手动修订", notification: "通知提取值更新" };
+  for (const entry of [...(mail.edit_history || [])].reverse()) {
+    const row = el("div", null, "history-entry");
+    row.append(el("strong", fmt(entry.at) + " · " + (labels[entry.kind] || entry.kind)));
+    for (const key of entry.fields) row.append(el("div", scheduleFieldLabels[key] + "：" + scheduleFieldText(key, entry.before[key]) + " → " + scheduleFieldText(key, entry.after[key])));
+    if (!entry.fields.length) row.append(el("div", "已核对新通知，保留手动修订。"));
+    details.append(row);
+  }
+  body.append(details);
+}
+function editMailSchedule(mail) {
+  if (dirtyNotes) return tell("请先保存备注，再编辑日程。", true);
+  const body = $("#detail-body");
+  body.replaceChildren();
+  dirtyNotes = true;
+  const form = el("form", null, "manual-form mail-schedule-form"), fields = {};
+  const typeLabel = el("label", "通知类型"), category = el("select");
+  category.setAttribute("aria-label", "通知类型"); category.required = true;
+  for (const text of ["测评", "笔试", "AI面试", "面试", "补充材料", "录用", "其他招聘通知"]) {
+    const option = el("option", text); option.value = text; category.append(option);
+  }
+  category.value = mail.category; fields.category = category; typeLabel.append(category); form.append(typeLabel);
+  for (const [key, label] of [["start", "开始时间（北京时间）"], ["deadline", "截止时间（北京时间）"]]) {
+    fields[key] = manualDateTime(label, mail[key] ? fmt(mail[key]).replace(" ", "T") : "");
+    form.append(fields[key].element);
+  }
+  const actionLabel = el("label", "待办事项"), action = el("textarea");
+  action.setAttribute("aria-label", "待办事项"); action.value = mail.action; action.required = true; action.maxLength = 10000;
+  actionLabel.append(action); fields.action = action; form.append(actionLabel);
+  form.append(el("div", "只保护你修改过的字段。后续通知如与修订冲突，会保留修订并提示核对；未确定的时间可留空。", "small"));
+  if (mail.pending_manual_review?.length) form.append(el("div", "有新通知待核对：保存将确认保留当前修订；采用最新通知将取消受保护字段，以最新通知为准。", "schedule-change"));
+  const comparison = el("details", null, "change-history");
+  comparison.append(el("summary", "对照原始值与最新通知"), scheduleComparison(mail));
+  comparison.open = !!mail.pending_manual_review?.length; form.append(comparison);
+  const error = el("div", null, "form-error"); error.setAttribute("role", "status"); form.append(error);
+  const buttons = el("div", null, "detail-buttons"), save = button("保存修订", null, "primary");
+  save.type = "submit";
+  const cancel = button("取消", () => { dirtyNotes = false; renderDetail(); });
+  buttons.append(save, cancel);
+  async function submit(op) {
+    save.disabled = cancel.disabled = true;
+    try {
+      const value = { op, id: mail.id, version: mail.version };
+      if (op === "save") {
+        value.category = fields.category.value; value.action = fields.action.value;
+        for (const key of ["start", "deadline"]) {
+          const originalInput = mail[key] ? fmt(mail[key]).replace(" ", "T") : "";
+          value[key] = fields[key].value === originalInput ? mail[key] : fields[key].value ? fields[key].value + ":00+08:00" : null;
+        }
+      }
+      data = await api("/api/mail-schedule", value);
+      dirtyNotes = false; render(); renderDetail();
+      tell(op === "save" ? "日程修订已保存" : "已采用最新通知");
+    } catch (failure) {
+      error.textContent = failure.message + "；输入内容仍保留";
+      save.disabled = cancel.disabled = false;
+    }
+  }
+  if (mail.manual_fields?.length) buttons.append(button("采用最新通知", () => {
+    if (form.querySelector(".source-confirmation")) return;
+    const panel = el("div", null, "source-confirmation schedule-change");
+    panel.append(el("div", "将取消此日程受保护的手动修订，采用最新通知；原修订仍保留在历史中。"),
+      button("确认采用", () => submit("use-notification")), button("暂不采用", () => panel.remove()));
+    form.append(panel);
+  }));
+  form.append(buttons); form.onsubmit = (event) => { event.preventDefault(); submit("save"); };
+  body.append(form); body.scrollTop = 0;
+}
 function renderDetail() {
   const m = data.emails.find((x) => x.id === selected);
   if (!m) return;
@@ -1137,6 +1233,7 @@ function renderDetail() {
     body.append(notice);
   }
   renderChangeHistory(body, m);
+  renderScheduleCorrections(body, m);
   body.append(el("div", m.action, "detail-action"));
   const all = el("label", null, "toolbar-group");
   all.append(
@@ -1199,6 +1296,7 @@ function renderDetail() {
       }
     }),
   );
+  if (m.active) buttons.prepend(button("编辑日程", () => editMailSchedule(m), "primary"));
   body.append(buttons);
 }
 async function renderFiltered(main) {
