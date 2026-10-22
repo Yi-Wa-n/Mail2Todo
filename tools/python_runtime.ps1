@@ -38,6 +38,11 @@ function Resolve-ProjectPython([string]$ProjectRoot, [switch]$PreserveTask) {
     }
     $resolved = ConvertTo-WindowlessPython '.venv\Scripts\pythonw.exe' $ProjectRoot
     if ($resolved) { return $resolved }
+    $cache = Join-Path $ProjectRoot 'private\python-launch-cache.txt'
+    if (Test-Path -LiteralPath $cache -PathType Leaf) {
+        $cached = ConvertTo-WindowlessPython (Get-Content -LiteralPath $cache -Raw -Encoding UTF8) $ProjectRoot
+        if ($cached) { return $cached }
+    }
     $existing = Get-ProjectTaskPython $ProjectRoot
     if ($existing) { return $existing }
     foreach ($name in @('pythonw.exe', 'python.exe')) {

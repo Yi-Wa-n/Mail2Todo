@@ -73,8 +73,11 @@ Copy-Item config.example.json private-config.json
 1. `private/python-path.txt`：一行 `pythonw.exe` 路径，相对路径以项目目录为基准。可复制根目录 `python-path.example.txt`，不需要 JSON 或引号。
 2. 环境变量 `AUTUMN_PYTHON`。
 3. 项目 `.venv/Scripts/pythonw.exe`。
-4. 属于当前项目、入口匹配的现有自动任务解释器，以兼容旧部署。
-5. PATH 中的 `pythonw.exe`，或 `python.exe` 同目录的 `pythonw.exe`；不使用 Windows Store 占位入口。
+4. 上次已确认的启动解释器缓存 `private/python-launch-cache.txt`；路径失效时自动重新查找。
+5. 属于当前项目、入口匹配的现有自动任务解释器，以兼容旧部署。
+6. PATH 中的 `pythonw.exe`，或 `python.exe` 同目录的 `pythonw.exe`；不使用 Windows Store 占位入口。
+
+双击入口会直接使用有效的显式配置、环境变量、项目虚拟环境或启动缓存，跳过 PowerShell。首次无可用路径时才通过原解析流程查找，并生成本机缓存；显式配置无效仍会停止并记录错误。缓存不会修改现有自动任务。
 
 也接受 `python.exe` 路径，但同目录必须存在 `pythonw.exe`。显式配置无效会停止，不会悄悄换环境。启动失败记入 `private/launcher.log`，不弹窗。已有自动任务维护时优先沿用任务当前解释器，保留触发时间、重试和运行入口；修改页面启动配置不会自动迁移已注册任务的 Python。Status 模式只读任务，不依赖 Python 路径解析。
 

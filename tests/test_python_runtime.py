@@ -38,6 +38,11 @@ Remove-Item Env:AUTUMN_PYTHON
 Check (Resolve-ProjectPython $root) '.venv\Scripts\pythonw.exe'
 Remove-Item -LiteralPath (Join-Path $root '.venv\Scripts\pythonw.exe')
 Check (Resolve-ProjectPython $root) 'existing\pythonw.exe'
+Set-Content -LiteralPath (Join-Path $root 'private\python-launch-cache.txt') -Value 'path\pythonw.exe' -Encoding UTF8
+Check (Resolve-ProjectPython $root) 'path\pythonw.exe'
+Check (Resolve-ProjectPython $root -PreserveTask) 'existing\pythonw.exe'
+Set-Content -LiteralPath (Join-Path $root 'private\python-launch-cache.txt') -Value 'missing\pythonw.exe' -Encoding UTF8
+Check (Resolve-ProjectPython $root) 'existing\pythonw.exe'
 function Get-ScheduledTask {$null}
 Check (Resolve-ProjectPython $root) 'path\pythonw.exe'
 if (ConvertTo-WindowlessPython 'C:\Users\Example\AppData\Local\Microsoft\WindowsApps\python.exe' $root) {throw 'Store alias accepted'}
@@ -74,3 +79,42 @@ function Start-Process {
                                   creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             self.assertEqual(0,result.returncode,result.stderr)
             self.assertIn('parameters verified',result.stdout)
+
+    def test_vbs_fast_launch_priority_and_invalid_path_fallback(self):
+        source=(SCRIPT.parents[1]/'打开本机秋招助手.vbs').read_text(encoding='ascii')
+        with tempfile.TemporaryDirectory(prefix='vbs launch space ') as folder:
+            root=Path(folder);(root/'private').mkdir();(root/'app').mkdir()
+            for name in ['cached','configured','environment','.venv/Scripts']:
+                (root/name).mkdir(parents=True)
+                (root/name/'pythonw.exe').touch()
+            harness=root/'check.vbs'
+            harness.write_text(source.replace('shell.Run ', 'CaptureLaunch ')+r'''
+Sub CaptureLaunch(command, style, wait)
+    If style <> 0 Or wait <> False Then WScript.Quit 2
+    Dim output
+    Set output = files.CreateTextFile(root & "\launch-command.txt", True, True)
+    output.Write command
+    output.Close
+End Sub
+''',encoding='ascii')
+            cache=root/'private/python-launch-cache.txt'
+            config=root/'private/python-path.txt'
+            cache.write_text('cached/pythonw.exe',encoding='utf-8-sig')
+            env=dict(os.environ);env.pop('AUTUMN_PYTHON',None)
+            def launch():
+                result=subprocess.run(['cscript.exe','//nologo','//U',str(harness)],env=env,capture_output=True,timeout=5,
+                    creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                self.assertEqual(0,result.returncode,result.stderr.decode('utf-16-le',errors='replace'))
+                return (root/'launch-command.txt').read_text(encoding='utf-16').strip()
+            self.assertIn(str(root/'.venv/Scripts/pythonw.exe'),launch())
+            (root/'.venv/Scripts/pythonw.exe').unlink()
+            self.assertIn(str(root/'cached/pythonw.exe'),launch())
+            env['AUTUMN_PYTHON']='environment/python.exe'
+            self.assertIn(str(root/'environment/pythonw.exe'),launch())
+            config.write_text('configured/python.exe',encoding='utf-8-sig')
+            self.assertIn(str(root/'configured/pythonw.exe'),launch())
+            config.write_text('missing/python.exe',encoding='utf-8-sig')
+            self.assertTrue(launch().startswith('powershell.exe'))
+            config.unlink();env.pop('AUTUMN_PYTHON')
+            cache.write_text('missing/python.exe',encoding='utf-8-sig')
+            self.assertTrue(launch().startswith('powershell.exe'))
