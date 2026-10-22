@@ -13,8 +13,18 @@ Windows 本地秋招邮件待办工具：网易 IMAP 增量读取、CodeBuddy CN
 
 ```powershell
 py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item config.example.json private-config.json
 ```
+
+`requirements.txt` 当前仅含说明：运行与测试均使用标准库，无第三方 Python 包。不要从通用环境导出全部已安装包作为本项目依赖。也可用独立 Conda 环境代替 `.venv`：
+
+```powershell
+conda create -n autumn-recruit python=3.13.12 pip
+conda run -n autumn-recruit python -m pip install -r requirements.txt
+```
+
+Conda 环境建好后，将该环境的 `pythonw.exe` 路径写入本机 `private/python-path.txt`。已有定时任务的解释器需要另行迁移；只修改启动配置不会修改任务。
 
 3. 编辑 `private-config.json`，将 `codebuddy_cli` 改成自己电脑上实际的可执行文件路径。JSON 路径使用 `/` 或双反斜杠。首选模型默认 `deepseek-v4.1-flash`，失败后允许 `auto` 一次，轻度思考。配置中不要填写邮箱授权码或其他令牌。
 4. 在网易邮箱网页开启 IMAP，生成客户端授权码，然后执行：

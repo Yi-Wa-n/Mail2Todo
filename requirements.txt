@@ -1,0 +1,4 @@
+# Python >= 3.10; validated with Python 3.13.12 on Windows.
+# Runtime and tests use only the Python standard library.
+# No third-party Python packages are currently required.
+# CodeBuddy CN CLI is installed separately; Node.js is used for JavaScript tests.
