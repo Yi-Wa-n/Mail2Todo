@@ -821,3 +821,9 @@ body.service-changing .workspace, body.service-changing #nav { pointer-events: n
 .schedule-values th:first-child { width: 18%; }
 .mail-schedule-form select { width: 100%; padding: 10px; border: 1px solid #d9e1ed; border-radius: 7px; background: #fcfdff; }
 .source-confirmation button { margin: 10px 8px 0 0; }
+
+.notes-entry { display: block; width: 100%; text-align: left; border-radius: 6px; padding: 8px 10px; line-height: 1.6; }
+.notes-present { border: 1px solid #c5d6f2; background: #f0f5ff; color: #34445b; }
+.notes-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: pre-line; overflow-wrap: anywhere; font-size: 12px; }
+.notes-empty { border: 1px dashed #d9e1ed; background: transparent; color: #788496; font-size: 12px; }
+.notes-empty:hover { background: #f7f9fc; color: #245fda; }

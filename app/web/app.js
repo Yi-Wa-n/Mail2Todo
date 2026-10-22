@@ -696,6 +696,19 @@ function emailPageRows(emails, requestedPage, size) {
     end: Math.min(start + size, sorted.length),
   };
 }
+function mailNotesButton(mail) {
+  const notes = (mail.notes || "").trim();
+  const entry = button("", () => openMail(mail.id), "notes-entry " + (notes ? "notes-present" : "notes-empty"));
+  if (notes) {
+    entry.append(el("span", notes, "notes-preview"));
+    entry.title = notes;
+    entry.setAttribute("aria-label", "查看或编辑备注：" + notes);
+  } else {
+    entry.textContent = "+ 添加备注";
+    entry.setAttribute("aria-label", "添加备注");
+  }
+  return entry;
+}
 function filterEmailRecords(emails, mode, includeDone, match) {
   return emails.filter((mail) =>
     (mode === "all" || (mode === "active" ? mail.active : !mail.active)) &&
@@ -748,7 +761,7 @@ function renderEmails(main) {
         ) : el("span", "—"),
       ),
       td(
-        button(m.notes || "添加备注", () => openMail(m.id), "link"),
+        mailNotesButton(m),
         "wrap",
       ),
       td(fmt(m.received)),
