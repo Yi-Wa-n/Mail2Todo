@@ -654,8 +654,21 @@ body.modal-open {
   gap: 15px;
   font-size: 13px;
 }
+.event-description { display: block; min-width: 0; }
+.calendar.view-list .event button { align-items: flex-start; }
+.calendar.view-list .event .event-description {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 10px;
+}
+.calendar.view-list .event-title { min-width: 0; overflow-wrap: anywhere; }
+.calendar.view-list .event-change { white-space: nowrap; }
 .calendar.view-list .event .time {
+  margin-left: auto;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .calendar.view-month .week,

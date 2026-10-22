@@ -432,21 +432,22 @@ function calendarDay(date, eventsByDay, continuous) {
         el("div", null, "event" + (step.done ? " done" : "")),
         step.category,
       ),
-      title = button("", () => openStep(step));
-    title.append(
+      title = button("", () => openStep(step)),
+      description = el("span", null, "event-description");
+    description.append(
       el(
         "span",
         step.company + "｜" + step.label + (step.estimated ? "（估算）" : ""),
         "event-title",
       ),
-      el("span", fmt(step.at).slice(11), "time"),
     );
+    title.append(description, el("span", fmt(step.at).slice(11), "time"));
     if (step.source !== "manual") {
       const mail = data.emails.find((item) => item.id === step.mail_id);
       const previous = mail && changeHistory(mail)[0]?.previous;
       if (previous) {
         const changes = timeChanges(previous, mail);
-        if (changes.length) title.append(el("span", "时间已变更", "event-change"));
+        if (changes.length) description.append(el("span", "时间已变更", "event-change"));
         title.title = changes.join("；");
       }
     }
