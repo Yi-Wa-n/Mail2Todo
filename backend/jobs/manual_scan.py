@@ -24,7 +24,12 @@ def main():
             set_meta(db,'local_last_error',entry)
             with (HOME/'local-gate.log').open('a',encoding='utf-8') as log:log.write(json.dumps(entry,ensure_ascii=False)+'\n')
             raise
-        finally:db.close()
+        finally:
+            db.close()
+            # A failed upload never repeats mail classification or changes scan success.
+            from backend.storage.cloud_sync import sync_once
+            try:sync_once()
+            except Exception:pass
 
 
 if __name__=='__main__':main()

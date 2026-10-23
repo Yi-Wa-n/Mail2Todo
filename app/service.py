@@ -24,6 +24,8 @@ class Service:
             db=repo.connect()
             try:repo.initialize(db)
             finally:db.close()
+        from backend.storage.cloud_sync import start_background
+        start_background()
 
     def use(self,fn):
         with self.guard:
