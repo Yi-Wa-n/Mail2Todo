@@ -14,16 +14,22 @@ import sqlite3
 import ssl
 import time
 from backend.storage.vault import HOME, crypt, account_home
+from backend.mail.deadlines import date_only
 
 TZ = dt.timezone(dt.timedelta(hours=8))
 CATEGORIES = ['投递回执', '测评', '笔试', 'AI面试', '面试', '补充材料', '录用', '未通过', '其他招聘通知']
-RECRUIT = re.compile(r'校园招聘|校招|秋招|春招|应聘|投递|简历|笔试|面试|录用|测评|招聘|offer|assessment|interview|application\s+(?:received|status)', re.I)
 IMPORTANT = {'测评', '笔试', 'AI面试', '面试', '补充材料', '录用'}
 STATUS = {'待处理', '已处理', '待核实'}
 
 
 def now():
     return dt.datetime.now(TZ)
+
+
+def time_boundary(value):
+    if date_only(value):
+        return dt.datetime.combine(dt.date.fromisoformat(value),dt.time.max,TZ)
+    return dt.datetime.fromisoformat(value)
 
 
 def canonical(value):
@@ -90,14 +96,14 @@ def parse_mail(raw, received=None):
     return {'message_id': str(message.get('Message-ID', '')).strip(), 'subject': str(message.get('Subject', '')), 'sender': str(message.get('From', '')), 'sent_date_header': str(message.get('Date', '')), 'received': (received or timestamp).astimezone(TZ).isoformat(), 'body': body.strip(), 'attachments': attachments}
 
 
-def safe_text(text):
+def safe_text(text, maximum=18000):
     """Limit prompt/log exposure; exact bodies remain DPAPI encrypted locally."""
     text = re.sub(r'https?://[^\s<>]+', '[链接保留在原邮件]', text, flags=re.I)
     text = re.sub(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '[邮箱已隐藏]', text)
     text = re.sub(r'(?<!\d)1[3-9]\d{9}(?!\d)', '[电话已隐藏]', text)
     text = re.sub(r'(?<!\d)\d{17}[\dXx](?!\d)', '[证件号已隐藏]', text)
     text = re.sub(r'((?:验证码|密码|口令|授权码|通行证|会议号|token)\s*[:：=]?\s*)\S+', r'\1[已隐藏]', text, flags=re.I)
-    return text[:18000]
+    return text if maximum is None else text[:maximum]
 
 
 def open_db(path=None):
@@ -130,7 +136,8 @@ def store_message(db, raw, folder, validity, uid, encrypt=crypt, received=None):
     mail = parse_mail(raw, received)
     # Message-ID alone is insufficient: distinct revisions can reuse an ID.
     key = digest(canonical([mail['message_id'], mail['subject'], mail['sender'], mail['sent_date_header'], mail['body'], mail['attachments']]))
-    candidate = bool(RECRUIT.search(mail['subject'] + '\n' + mail['body']))
+    # Every new mail must be routed. Only explicit exclusions can avoid review.
+    candidate = True
     added = db.execute('INSERT OR IGNORE INTO mails(id,payload,candidate) VALUES (?,?,?)', (key, encrypt(canonical(mail).encode()), int(candidate))).rowcount
     db.execute('INSERT OR IGNORE INTO sources(mail_id,folder,validity,uid) VALUES (?,?,?,?)', (key, folder, validity, str(uid)))
     db.commit()
@@ -249,6 +256,15 @@ def pending(db, limit=30, decrypt=lambda x: crypt(x, decrypt=True)):
 
 def ingest(db, decisions, audit_id=None):
     # Validate the entire batch before making any change.
+    from backend.mail.task_links import validate_link
+    linked_items={r['mail_id']:json.loads(r['payload']) for r in db.execute('SELECT mail_id,payload FROM records')}
+    saved_items=dict(linked_items)
+    linked_items.update({d['id']:d for d in decisions if d.get('relevant')})
+    if any(d.get('same_task_as') for d in decisions):
+        for key in {d['id'] for d in decisions}|{d['same_task_as'] for d in decisions if d.get('same_task_as')}:
+            row=db.execute('SELECT payload FROM mails WHERE id=?',(key,)).fetchone()
+            if row and key in linked_items:
+                linked_items[key]={**linked_items[key],'received':json.loads(crypt(row['payload'],decrypt=True))['received']}
     for decision in decisions:
         if not db.execute('SELECT 1 FROM mails WHERE id=?', (decision.get('id'),)).fetchone():
             raise ValueError('记录不存在')
@@ -261,11 +277,15 @@ def ingest(db, decisions, audit_id=None):
                 raise ValueError('缺少必要字段：' + field)
         if decision['category'] not in CATEGORIES or decision['status'] not in STATUS:
             raise ValueError('分类或处理状态无效')
+        validate_link({**linked_items[decision['id']],'manual_values':saved_items.get(decision['id'],{}).get('manual_values',{})},linked_items)
         if not isinstance(decision.get('important', False), bool):
             raise ValueError('重要待办必须明确判断，不能使用文字代替布尔值')
         for field in ('event_at', 'deadline'):
             value = decision.get(field)
             if value:
+                if field=='deadline' and date_only(value):
+                    dt.date.fromisoformat(value)
+                    continue
                 parsed = dt.datetime.fromisoformat(value)
                 if parsed.tzinfo is None:
                     raise ValueError('时间必须包含时区；不确定时应留空')
@@ -318,13 +338,13 @@ def reminders(db, items, at=None):
     superseded = inactive_ids(items)
     result = []
     for item in items:
-        if item['id'] in superseded or item.get('manual_status', item['status']) == '已处理':
+        if item.get('same_task_as') or item['id'] in superseded or item.get('manual_status', item['status']) == '已处理':
             continue
         event = item.get('event_at')
         deadline = item.get('deadline')
         occurrence = deadline or event
         received = dt.datetime.fromisoformat(item['received'])
-        is_live = not occurrence or dt.datetime.fromisoformat(occurrence) > at
+        is_live = not occurrence or time_boundary(occurrence) > at
         if item.get('important', False) and item['category'] in {'AI面试', '面试', '补充材料', '录用'} and is_live and at - received < dt.timedelta(days=30):
             result.append({'id': item['id'] + ':new', 'kind': '新通知', 'item': item})
         # Remind for each separately specified event and deadline; collapse identical times.
@@ -332,6 +352,8 @@ def reminders(db, items, at=None):
         optional = set(item.get('event_options', [])) if not event else set()
         timestamps.update(optional)
         for timestamp in sorted(timestamps):
+            # Date-only nodes are not exact-time notifications.
+            if date_only(timestamp):continue
             remaining = dt.datetime.fromisoformat(timestamp) - at
             hours = remaining.total_seconds() / 3600
             if 0 < hours <= 24:
@@ -386,7 +408,7 @@ def progress(items):
                 text += ' · 已处理'
             elif item['id'] in superseded:
                 text += ' · 已由后续通知覆盖'
-            elif item.get('deadline') and dt.datetime.fromisoformat(item['deadline']) < now():
+            elif item.get('deadline') and time_boundary(item['deadline']) < now():
                 text += ' · 已过期，结果待核实'
             elif item.get('event_at') and dt.datetime.fromisoformat(item['event_at']) < now():
                 text += ' · 时间已过，是否参加待核实'
@@ -406,7 +428,7 @@ def milestone_for(item):
         return None
     text = (item['subject'] + '\n' + item.get('evidence', '')).lower()
     when = item.get('event_at') or item.get('deadline')
-    stamp = dt.datetime.fromisoformat(when).strftime('%m-%d %H:%M') if when else '时间待核实'
+    stamp = when[5:]+'（日期）' if date_only(when) else dt.datetime.fromisoformat(when).strftime('%m-%d %H:%M') if when else '时间待核实'
     if item['category'] in ('测评', '笔试'):
         return ('written' if item['category'] == '笔试' else 'assessment'), stamp
     if item['category'] == 'AI面试' or re.search(r'ai\s*面试|ai初试|智能面试', text, re.I):

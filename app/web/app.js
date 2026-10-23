@@ -78,6 +78,7 @@ function button(text, fn, cls) {
 }
 function fmt(value) {
   if (!value) return "—";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return String(value);
   const d = new Date(value);
   return isNaN(d)
     ? String(value)
@@ -476,11 +477,11 @@ function calendarDay(date, eventsByDay, continuous) {
     description.append(
       el(
         "span",
-        step.company + "｜" + step.label + (step.estimated ? "（估算）" : ""),
+        step.company + "｜" + step.label + (step.estimated ? (step.date_only ? "（推算日期）" : "（估算）") : ""),
         "event-title",
       ),
     );
-    title.append(description, el("span", fmt(step.at).slice(11), "time"));
+    title.append(description, el("span", step.date_only ? "仅日期 · 无指定时刻" : fmt(step.at).slice(11), "time"));
     if (step.source !== "manual") {
       const mail = data.emails.find((item) => item.id === step.mail_id);
       if (mail?.manual_fields?.length) description.append(el("span", mail.pending_manual_review?.length ? "新通知待核对" : "已手动修订", "event-change"));
@@ -717,7 +718,7 @@ function renderSteps(main) {
       td(company),
       td(tag(s.category)),
       td(action, "wrap"),
-      td(fmt(s.at) + (s.estimated ? "（估算）" : "")),
+      td(fmt(s.at) + (s.estimated ? (s.date_only ? "（推算日期）" : "（估算）") : "")),
       td(fmt(s.received)),
     );
     tbody.append(row);
@@ -799,7 +800,7 @@ function renderEmails(main) {
       td(tag(m.category)),
       td(m.action, "wrap"),
       td(fmt(m.start)),
-      td(fmt(m.deadline)),
+      td(fmt(m.deadline) + (m.deadline_estimated ? (/^\d{4}-\d{2}-\d{2}$/.test(m.deadline || "") ? "（推算日期）" : "（估算时间）") : "")),
       td(
         m.active ? checkbox(
           m.done,
@@ -864,13 +865,13 @@ function openStep(step) {
     openManual(data.manual_events.find((e) => e.id === step.manual_id));
   else openMail(step.mail_id);
 }
-function manualDateTime(label, initial = "") {
+function manualDateTime(label, initial = "", allowDateOnly = false) {
   const group = el("fieldset", null, "manual-datetime");
   group.append(el("legend", label));
   const input = el("input");
   input.type = "text";
   input.inputMode = "numeric";
-  input.placeholder = "例如：2026-10-22 14:30";
+  input.placeholder = allowDateOnly ? "2026-10-22 或 2026-10-22 14:30" : "例如：2026-10-22 14:30";
   input.setAttribute("aria-label", label);
   input.autocomplete = "off";
   input.value = initial.replace("T", " ");
@@ -884,7 +885,7 @@ function manualDateTime(label, initial = "") {
     const digits = input.value.replace(/\D/g, "");
     let message = "";
     if (digits) {
-      if (digits.length !== 12) message = "请填写完整的日期和时间";
+      if (digits.length !== 12 && !(allowDateOnly && digits.length === 8)) message = allowDateOnly ? "请填写日期，可选填写具体时间" : "请填写完整的日期和时间";
       else {
         const year = Number(digits.slice(0, 4)), month = Number(digits.slice(4, 6));
         const day = Number(digits.slice(6, 8)), hour = Number(digits.slice(8, 10));
@@ -1223,7 +1224,7 @@ function editMailSchedule(mail) {
   }
   category.value = mail.category; fields.category = category; typeLabel.append(category); form.append(typeLabel);
   for (const [key, label] of [["start", "开始时间（北京时间）"], ["deadline", "截止时间（北京时间）"]]) {
-    fields[key] = manualDateTime(label, mail[key] ? fmt(mail[key]).replace(" ", "T") : "");
+    fields[key] = manualDateTime(label, mail[key] ? fmt(mail[key]).replace(" ", "T") : "", key === "deadline");
     form.append(fields[key].element);
   }
   const actionLabel = el("label", "待办事项"), action = el("textarea");
@@ -1247,7 +1248,7 @@ function editMailSchedule(mail) {
         value.category = fields.category.value; value.action = fields.action.value;
         for (const key of ["start", "deadline"]) {
           const originalInput = mail[key] ? fmt(mail[key]).replace(" ", "T") : "";
-          value[key] = fields[key].value === originalInput ? mail[key] : fields[key].value ? fields[key].value + ":00+08:00" : null;
+          value[key] = fields[key].value === originalInput ? mail[key] : fields[key].value ? (/^\d{4}-\d{2}-\d{2}$/.test(fields[key].value) ? fields[key].value : fields[key].value + ":00+08:00") : null;
         }
       }
       data = await api("/api/mail-schedule", value);
@@ -1308,10 +1309,11 @@ function renderDetail() {
       el("strong", s.label),
       el(
         "div",
-        fmt(s.at) + (s.estimated ? " · 估算，以系统为准" : ""),
+        fmt(s.at) + (s.estimated ? (s.date_only ? " · 推算日期，计数口径待确认" : " · 估算，以系统为准") : ""),
         "small",
       ),
       el("div", s.action, "small"),
+      el("div", s.basis || "", "small"),
     );
     row.append(
       checkbox(s.done, (v, c) => change("step", s, v, c), "完成 " + s.label),

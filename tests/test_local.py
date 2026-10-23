@@ -175,7 +175,7 @@ class LocalTasks(unittest.TestCase):
     def test_corrected_output_is_audited_and_committed_only_once(self):
         self.db.execute('UPDATE mails SET reviewed=0');self.db.commit()
         decision={k:self.item.get(k) for k in gate.response_schema()['properties']['decisions']['items']['required']}
-        decision.update(resolves=[],event_options=[])
+        decision.update(resolves=[],event_options=[],deadline_rules=[])
         valid=json.dumps({'decisions':[decision]},ensure_ascii=False)
         with patch.object(gate,'RUNTIME',Path(self.temp.name)),patch.object(gate.subprocess,'run',side_effect=[self.envelope('{bad json'),self.envelope(valid)]) as cli:
             result=gate.run_once(self.db,{'model_provider':'codebuddy_cn','codebuddy_cli':'fake-cli','codebuddy_model':'deepseek-v4.1-flash'},scanner=lambda *_:{'new':0},credentials_loader=lambda:{})

@@ -9,6 +9,8 @@ from backend.mail.core import records,action_items,inactive_ids,get_meta,set_met
 from backend.mail.steps import project
 from backend.storage.vault import HOME,crypt
 from backend.storage.vault import account_home
+from backend.mail.deadlines import date_only
+from backend.mail.task_links import task_id
 
 
 def connect():
@@ -22,6 +24,7 @@ def timestamp(value):
     if not value:return None
     try:
         text=str(value)
+        if date_only(text):return dt.date.fromisoformat(text).isoformat()
         if text.isdigit() and len(text)>=12:
             parsed=dt.datetime.fromtimestamp(int(text)/1000,dt.timezone.utc)
         else:
@@ -98,7 +101,8 @@ def sync_local(db,initial=False,commit=True):
             payload={'id':key,'mail_id':mail_id,'company':v['公司'],'role':v['岗位'],
                      'category':v['通知类型'],'label':v['节点类型'],'action':v['待办事项'],
                      'at':timestamp(v.get('节点时间')),'active':not v.get('已失效',False),
-                     'estimated':'估算' in v.get('时间依据',''),'basis':v.get('时间依据',''),
+                     'estimated':bool(v.get('推算')) or '估算' in v.get('时间依据',''),'basis':v.get('时间依据',''),
+                     'date_only':bool(v.get('日期精度')) or date_only(v.get('节点时间')),
                      'received':item['received']}
             done=bool(old['done']) if old else bool(completion.get(key,v.get('已完成',False)))
             db.execute('INSERT INTO local_steps(id,mail_id,payload,done,version) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET mail_id=excluded.mail_id,payload=excluded.payload,version=excluded.version',
@@ -127,16 +131,20 @@ def state(db):
         item=json.loads(row['payload']);item.update(id=row['mail_id'],subject=row['subject'],received=row['received'])
         raw.append((item,row))
     inactive=inactive_ids([v[0] for v in raw])
+    task_items={v[0]['id']:v[0] for v in raw}
     emails=[]
     for item,row in raw:
         if not item.get('requires_action',item.get('category') in ('测评','笔试','面试','AI面试','补充材料','录用')):continue
-        v=values(item);related=by_mail.get(item['id'],[])
+        v=values(item);related=by_mail.get(task_id(item['id'],task_items),[])
         emails.append({'id':item['id'],'company':v['公司'],'role':v['岗位'],'category':v['通知类型'],
-                       'action':v['待办事项'],'start':timestamp(v.get('开始时间')),'deadline':timestamp(v.get('截止时间')),
+                       'action':('同一事项提醒（共用原日程）：' if item.get('same_task_as') else '')+v['待办事项']+('；补充期限：'+item['additional_deadline_summary'] if item.get('additional_deadline_summary') and '待办事项' not in item.get('manual_values',{}) else ''),'start':timestamp(v.get('开始时间')),'deadline':timestamp(v.get('截止时间') or (item.get('additional_deadline_display') if '截止时间' not in item.get('manual_values',{}) else None)),
+                       'deadline_estimated':bool(item.get('deadline_estimated') or (not v.get('截止时间') and item.get('additional_deadline_estimated'))) and '截止时间' not in item.get('manual_values',{}),
+                       'deadline_basis':item.get('deadline_basis',''),
                        'received':row['received'],'subject':row['subject'],'notes':row['notes'],
                        'done':all(s['done'] for s in related) if related else bool(item.get('manual_completed')),
-                       'active':item['id'] not in inactive,'version':row['version'],
+                       'active':item['id'] not in inactive and task_id(item['id'],task_items) not in inactive,'version':row['version'],
                        'supersedes':item.get('supersedes'),
+                       'same_task_as':item.get('same_task_as'),
                        'original':item.get('manual_schedule_original',mail_schedule.extracted(item)),
                        'notification':mail_schedule.extracted(item),
                        'manual_fields':[key for key,label in mail_schedule.FIELDS.items() if label in item.get('manual_values',{})],
@@ -176,7 +184,9 @@ def mutate(db,kind,value):
             mail_id=key
             if kind=='notes':db.execute('UPDATE local_overrides SET notes=? WHERE mail_id=?',(value['notes'],key))
             else:
-                for step in db.execute('SELECT id,payload FROM local_steps WHERE mail_id=?',(key,)).fetchall():
+                items={r['mail_id']:json.loads(r['payload']) for r in db.execute('SELECT mail_id,payload FROM records')}
+                mail_id=task_id(key,items)
+                for step in db.execute('SELECT id,payload FROM local_steps WHERE mail_id=?',(mail_id,)).fetchall():
                     if json.loads(step['payload'])['active']:
                         db.execute('UPDATE local_steps SET done=?,version=version+1 WHERE id=?',(int(value['done']),step['id']))
         record=db.execute('SELECT payload FROM records WHERE mail_id=?',(mail_id,)).fetchone()
@@ -187,7 +197,13 @@ def mutate(db,kind,value):
             payload['manual_completed']=all(s['done'] for s in active) if active else value['done']
         encoded=canonical(payload)
         db.execute('UPDATE records SET payload=?,synced_hash=? WHERE mail_id=?',(encoded,digest(encoded),mail_id))
-        db.execute('UPDATE local_overrides SET version=version+1 WHERE mail_id=?',(mail_id,))
+        if kind=='notes':
+            affected=[mail_id]
+        else:
+            items={r['mail_id']:json.loads(r['payload']) for r in db.execute('SELECT mail_id,payload FROM records')}
+            affected=[i for i in items if task_id(i,items)==mail_id]
+        for affected_id in affected:
+            db.execute('UPDATE local_overrides SET version=version+1 WHERE mail_id=?',(affected_id,))
     bump(db)
 
 

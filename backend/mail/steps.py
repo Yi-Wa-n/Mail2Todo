@@ -13,8 +13,26 @@ def project(items, detail_values):
             seen.add(item['id'])
         return item['id']
     for item in sorted(action_items(items), key=lambda i:i.get('received','')):
+        if item.get('same_task_as'):continue
         v = detail_values(item)
         category = v['通知类型']
+        if item.get('date_steps'):
+            rules=item['date_steps']
+            for index,rule in enumerate(rules):
+                stamp=rule.get('date') or ''
+                basis=rule['basis']
+                estimated=bool(rule.get('estimated'))
+                if index==0 and '截止时间' in item.get('manual_values',{}):
+                    stamp=v.get('截止时间') or '';basis='手动修订的截止日期/时间（北京时间）';estimated=False
+                action=v['待办事项'] if index==0 and '待办事项' in item.get('manual_values',{}) else rule['action']
+                result[root_id(item)+':'+rule['key']]={
+                    'mail_id':item['id'],'日程':v['公司']+'｜'+rule['label'],
+                    '公司':v['公司'],'岗位':v['岗位'],'通知类型':category,
+                    '节点类型':rule['label'],'待办事项':action,'节点时间':stamp,'结束时间':stamp,
+                    '日期精度':bool(stamp) and len(str(stamp))==10,'推算':estimated,
+                    '已完成':bool(item.get('manual_completed')) and len(rules)==1,
+                    '原邮件':item.get('remote_record_id',''),'已失效':item['id'] in inactive,'时间依据':basis}
+            continue
         # Only explicit action evidence creates a confirmation step. Notes are never parsed.
         evidence = (v.get('待办事项') or '') + '\n' + (item.get('evidence') or '')
         confirm = bool(re.search(r'确认.{0,5}(?:是否.{0,3})?参加|回复.{0,12}参加', evidence) or (re.search(r'预约|准考证', evidence) and not re.search(r'(?:无需|不需|不用|免预约).{0,10}(?:预约|准考证)', evidence)))
@@ -55,4 +73,5 @@ def project(items, detail_values):
                 '已完成':legacy_done and not split,
                 '原邮件':item.get('remote_record_id',''),
                 '已失效':item['id'] in inactive, '时间依据':basis}
-    return result
+    from backend.mail.deadline_supplements import project_supplements
+    return project_supplements(items,detail_values,result)

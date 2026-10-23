@@ -2,6 +2,7 @@
 import datetime as dt
 import json
 from backend.mail.core import canonical, digest, now, inactive_ids
+from backend.mail.deadlines import date_only
 
 FIELDS = {'category':'通知类型', 'start':'开始时间', 'deadline':'截止时间', 'action':'待办事项'}
 CATEGORIES = ('测评', '笔试', 'AI面试', '面试', '补充材料', '录用', '其他招聘通知')
@@ -96,6 +97,9 @@ def normalize(value):
         if raw in (None, ''):result[key] = None;continue
         try:
             if not isinstance(raw, str):raise ValueError()
+            if key=='deadline' and date_only(raw):
+                result[key]=dt.date.fromisoformat(raw).isoformat()
+                continue
             parsed = dt.datetime.fromisoformat(raw)
             if parsed.tzinfo is None or parsed.utcoffset() is None:raise ValueError()
             result[key] = parsed.astimezone(dt.timezone(dt.timedelta(hours=8))).isoformat()
@@ -118,6 +122,7 @@ def edit(db, value, sync):
         items = [json.loads(r['payload']) | {'id':r['mail_id']} for r in db.execute('SELECT mail_id,payload FROM records')]
         item = next((item for item in items if item['id'] == key), None)
         if item is None or key in inactive_ids(items):raise ValueError('旧通知已被覆盖，请编辑最新安排')
+        if item.get('same_task_as'):raise ValueError('这封提醒与原通知共用日程，请在原通知或日历中修改')
         if not item.get('requires_action', item.get('category') in CATEGORIES):raise ValueError('这封邮件没有可编辑的日程')
         before = effective(item)
         patches = dict(item.get('manual_values', {}))

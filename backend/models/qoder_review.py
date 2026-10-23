@@ -19,14 +19,19 @@ def can_fallback(run):
 
 
 def validate(value, schema):
-    """Validate the review contract's object/array/string/bool/null schema subset."""
+    """Validate the review contract, including bounded integer deadline counts."""
     kinds=schema['type'] if isinstance(schema['type'],list) else [schema['type']]
     matches={'object':isinstance(value,dict),'array':isinstance(value,list),
-             'string':isinstance(value,str),'boolean':isinstance(value,bool),'null':value is None}
+             'string':isinstance(value,str),'boolean':isinstance(value,bool),'null':value is None,
+             'integer':type(value) is int}
     if not any(matches.get(kind,False) for kind in kinds):
         raise ValueError('模型字段类型不符合输出约定')
     if 'enum' in schema and value not in schema['enum']:
         raise ValueError('模型分类超出输出约定')
+    if type(value) is int and (('minimum' in schema and value<schema['minimum']) or ('maximum' in schema and value>schema['maximum'])):
+        raise ValueError('模型数值超出输出约定')
+    if isinstance(value,list) and 'maxItems' in schema and len(value)>schema['maxItems']:
+        raise ValueError('模型列表超出输出约定')
     if isinstance(value,dict):
         props=schema.get('properties',{})
         if not set(schema.get('required',[])).issubset(value):
